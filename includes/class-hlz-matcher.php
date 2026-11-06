@@ -99,13 +99,15 @@ class HLZ_Matcher {
 			}
 
 			$meeting = $hits[0];
+			$zoom_date = HLZ_Bridge::zoom_local_date( (string) ( $meeting['start_time'] ?? '' ) );
 			HLZ_Shares::upsert_day(
 				$eve_id,
 				$day,
 				array(
 					'meeting_id'     => (string) ( $meeting['id'] ?? '' ),
+					'meeting_uuid'   => (string) ( $meeting['uuid'] ?? '' ),
 					'topic'          => sanitize_text_field( (string) ( $meeting['topic'] ?? '' ) ),
-					'recording_date' => (string) $slot['date'],
+					'recording_date' => $zoom_date !== '' ? $zoom_date : (string) $slot['date'],
 					'match_source'   => 'auto',
 					'last_error'     => '',
 				)
@@ -122,11 +124,15 @@ class HLZ_Matcher {
 	public static function save_manual( array $event, array $chosen, array $meetings ): void {
 		$eve_id   = (int) $event['eve_id'];
 		$existing = HLZ_Shares::for_event( $eve_id );
-		$by_id    = array();
+		$by_key = array();
 		foreach ( $meetings as $meeting ) {
-			$id = (string) ( $meeting['id'] ?? '' );
-			if ( $id !== '' ) {
-				$by_id[ $id ] = $meeting;
+			$uuid = trim( (string) ( $meeting['uuid'] ?? '' ) );
+			$id   = trim( (string) ( $meeting['id'] ?? '' ) );
+			if ( $uuid !== '' ) {
+				$by_key[ $uuid ] = $meeting;
+			}
+			if ( $id !== '' && ! isset( $by_key[ $id ] ) ) {
+				$by_key[ $id ] = $meeting;
 			}
 		}
 
@@ -147,7 +153,11 @@ class HLZ_Matcher {
 				continue;
 			}
 
-			if ( $current && (string) $current->meeting_id === $pick && (string) $current->match_source === 'manual' ) {
+			$current_key = $current ? trim( (string) ( $current->meeting_uuid ?? '' ) ) : '';
+			if ( $current_key === '' && $current ) {
+				$current_key = trim( (string) $current->meeting_id );
+			}
+			if ( $current && $current_key === $pick && (string) $current->match_source === 'manual' ) {
 				continue;
 			}
 
@@ -155,10 +165,11 @@ class HLZ_Matcher {
 				HLZ_Shares::delete_day( $eve_id, $day );
 			}
 
-			$meeting = $by_id[ $pick ] ?? null;
+			$meeting = $by_key[ $pick ] ?? null;
 			$date    = $meeting ? HLZ_Bridge::zoom_local_date( (string) ( $meeting['start_time'] ?? '' ) ) : (string) $slot['date'];
 			$fields  = array(
-				'meeting_id'   => $pick,
+				'meeting_id'   => $meeting ? (string) ( $meeting['id'] ?? '' ) : '',
+				'meeting_uuid' => $meeting ? (string) ( $meeting['uuid'] ?? '' ) : $pick,
 				'topic'        => $meeting ? sanitize_text_field( (string) ( $meeting['topic'] ?? '' ) ) : '',
 				'match_source' => 'manual',
 				'last_error'   => '',
@@ -184,7 +195,7 @@ class HLZ_Matcher {
 			if ( $local === '' || $local < $window['from'] || $local > $window['to'] ) {
 				continue;
 			}
-			if ( (string) ( $meeting['id'] ?? '' ) === '' ) {
+			if ( trim( (string) ( $meeting['uuid'] ?? '' ) ) === '' && trim( (string) ( $meeting['id'] ?? '' ) ) === '' ) {
 				continue;
 			}
 			$out[] = $meeting;
@@ -254,7 +265,7 @@ class HLZ_Matcher {
 			if ( $local !== $date ) {
 				continue;
 			}
-			if ( (string) ( $meeting['id'] ?? '' ) === '' ) {
+			if ( trim( (string) ( $meeting['uuid'] ?? '' ) ) === '' && trim( (string) ( $meeting['id'] ?? '' ) ) === '' ) {
 				continue;
 			}
 			$hits[] = $meeting;

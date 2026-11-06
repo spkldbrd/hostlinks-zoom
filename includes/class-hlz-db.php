@@ -79,6 +79,7 @@ class HLZ_DB {
 				eve_id bigint(20) unsigned NOT NULL DEFAULT 0,
 				day_index tinyint(3) unsigned NOT NULL DEFAULT 1,
 				meeting_id varchar(64) NOT NULL DEFAULT '',
+				meeting_uuid varchar(128) NOT NULL DEFAULT '',
 				topic varchar(500) NOT NULL DEFAULT '',
 				recording_date date DEFAULT NULL,
 				share_url text NULL,

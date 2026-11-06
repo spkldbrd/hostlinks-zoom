@@ -54,10 +54,7 @@ class HLZ_Mailer {
 	 * Plain seeded letters become paragraphs so the editor can bold them.
 	 */
 	public static function body_for_editor( string $body ): string {
-		if ( self::is_html( $body ) ) {
-			return $body;
-		}
-		return wpautop( $body );
+		return self::preserve_line_breaks( $body );
 	}
 
 	/**
@@ -69,8 +66,11 @@ class HLZ_Mailer {
 			(string) ( $event['eve_end'] ?? '' )
 		);
 		$class_name = (string) $template->label;
-		$body       = self::body_for_editor( (string) $template->body );
-		$note_html  = trim( $note ) === '' ? '' : nl2br( esc_html( $note ) );
+		$body      = self::preserve_line_breaks( (string) $template->body );
+		$note_html = trim( $note ) === '' ? '' : nl2br( esc_html( $note ) );
+		if ( trim( $note ) === '' ) {
+			$body = preg_replace( '/\{note\}(?:\s|<br\s*\/?>)*/i', '', $body );
+		}
 
 		$body = str_replace(
 			array( '{class_name}', '{dates}', '{note}', '{zoom}' ),
@@ -112,20 +112,18 @@ class HLZ_Mailer {
 			return esc_html( '(Share links appear here after they are prepared.)' );
 		}
 
-		$multi = false;
-		foreach ( $recordings as $row ) {
-			if ( (int) $row->day_index > 1 ) {
-				$multi = true;
-			}
-		}
+		$ready = HLZ_Shares::in_date_order( $ready );
+		$multi = count( $ready ) > 1;
 		$blocks = array();
+		$day_number = 0;
 		foreach ( $ready as $row ) {
+			$day_number++;
 			$url   = esc_url( trim( (string) $row->share_url ) );
 			$label = esc_html( trim( (string) $row->share_url ) );
 			$pass  = esc_html( trim( (string) $row->passcode ) );
 			$html  = '';
 			if ( $multi ) {
-				$html .= '<strong>Day ' . (int) $row->day_index . ':</strong><br>';
+				$html .= '<strong>Day ' . $day_number . ':</strong><br>';
 			}
 			$html    .= '<a href="' . $url . '">' . $label . '</a><br>';
 			$html    .= 'Passcode: ' . $pass;
@@ -230,6 +228,36 @@ class HLZ_Mailer {
 
 	private static function is_html( string $body ): bool {
 		return (bool) preg_match( '/<(p|br|strong|b|em|i|u|a|ul|ol|li|div|span|h[1-6])\b/i', $body );
+	}
+
+	/**
+	 * A letter with a link is HTML, but the line breaks around that link are still plain text.
+	 * Turn those leftover returns into breaks without touching the tags.
+	 */
+	private static function preserve_line_breaks( string $body ): string {
+		if ( ! self::is_html( $body ) ) {
+			return wpautop( $body );
+		}
+		if ( ! preg_match( "/\n|\r/", $body ) ) {
+			return $body;
+		}
+		$body  = str_replace( array( "\r\n", "\r" ), "\n", $body );
+		$parts = preg_split( '/(<[^>]+>)/', $body, -1, PREG_SPLIT_DELIM_CAPTURE );
+		$html  = '';
+		foreach ( (array) $parts as $part ) {
+			if ( $part === '' ) {
+				continue;
+			}
+			if ( $part[0] === '<' ) {
+				$html .= $part;
+				continue;
+			}
+			if ( trim( $part ) === '' ) {
+				continue;
+			}
+			$html .= str_replace( "\n", '<br>', $part );
+		}
+		return $html;
 	}
 
 	private static function from_header( string $name, string $email ): string {

@@ -63,7 +63,9 @@ class HLZ_Admin {
 			.hlz-actions form{margin:0}
 			.hlz-preview{width:100%;max-width:760px;min-height:420px;font-family:Consolas,monospace}
 			.hlz-note{width:100%;max-width:760px;min-height:80px}
-			.hlz-mail-preview{max-width:760px;background:#fff;border:1px solid #c3c4c7;padding:18px 20px}
+			.hlz-mail-preview{max-width:760px;background:#fff;border:1px solid #c3c4c7;padding:18px 20px;font-family:Calibri,Arial,sans-serif;font-size:16px;line-height:1.45;color:#222}
+			.hlz-mail-preview p{margin:0 0 1em}
+			.hlz-mail-preview p:last-child{margin-bottom:0}
 			.hlz-mail-preview a{word-break:break-all}
 			.hlz-body{width:100%;min-height:480px;font-family:Consolas,monospace}
 			.hlz-muted{color:#646970}
@@ -577,8 +579,8 @@ class HLZ_Admin {
 		}
 
 		$rows = HLZ_Shares::for_event( $eve_id );
-		if ( self::should_prepare( $event, $rows ) ) {
-			$prepared = HLZ_Shares::prepare_event( $eve_id );
+		if ( HLZ_Settings::has_credentials() && self::rows_have_meetings( $rows ) ) {
+			$prepared = HLZ_Shares::prepare_event( $eve_id, is_array( $meetings ) ? $meetings : array() );
 			if ( is_wp_error( $prepared ) ) {
 				echo '<div class="notice notice-error"><p>' . esc_html( $prepared->get_error_message() ) . '</p></div>';
 			}
@@ -703,12 +705,24 @@ class HLZ_Admin {
 				echo esc_html( (string) $row->topic !== '' ? $row->topic : (string) $row->meeting_id );
 				echo '<br><span class="hlz-muted">Turn the share off before choosing a different recording.</span>';
 			} else {
-				$selected = $row ? (string) $row->meeting_id : '';
+				$selected = '';
+				if ( $row ) {
+					$selected = trim( (string) ( $row->meeting_uuid ?? '' ) );
+					if ( $selected === '' ) {
+						$selected = (string) $row->meeting_id;
+					}
+				}
 				echo '<select name="meeting_' . esc_attr( (string) $day ) . '">';
 				echo '<option value="">— Not matched —</option>';
 				$seen = array();
 				foreach ( $choices as $meeting ) {
-					$id = (string) $meeting['id'];
+					$id = trim( (string) ( $meeting['uuid'] ?? '' ) );
+					if ( $id === '' ) {
+						$id = trim( (string) ( $meeting['id'] ?? '' ) );
+					}
+					if ( $id === '' ) {
+						continue;
+					}
 					$seen[ $id ] = true;
 					echo '<option value="' . esc_attr( $id ) . '" ' . selected( $selected, $id, false ) . '>' . esc_html( self::meeting_label( $meeting ) ) . '</option>';
 				}
@@ -896,6 +910,18 @@ class HLZ_Admin {
 	/**
 	 * @param array<int,object> $rows
 	 */
+	/**
+	 * @param array<int,object> $rows
+	 */
+	private static function rows_have_meetings( array $rows ): bool {
+		foreach ( $rows as $row ) {
+			if ( HLZ_Shares::api_meeting_id( $row ) !== '' && (string) $row->status !== 'off' ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	private static function should_prepare( array $event, array $rows ): bool {
 		if ( ! HLZ_Settings::has_credentials() ) {
 			return false;

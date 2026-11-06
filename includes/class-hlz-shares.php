@@ -131,13 +131,9 @@ class HLZ_Shares {
 	 * @return string|WP_Error kept, created, unchanged, or needs_passcode
 	 */
 	public static function prepare( object $row, bool $replace = false ) {
-		$meeting_id = trim( (string) $row->meeting_id );
+		$meeting_id = self::api_meeting_id( $row );
 		if ( $meeting_id === '' ) {
 			return new WP_Error( 'hlz_prepare', 'Choose a recording before preparing a share link.' );
-		}
-
-		if ( ! $replace && trim( (string) $row->share_url ) !== '' && trim( (string) $row->passcode ) !== '' ) {
-			return 'unchanged';
 		}
 
 		if ( ! $replace ) {
@@ -151,22 +147,34 @@ class HLZ_Shares {
 				return 'kept';
 			}
 			if ( $existing['shared'] ) {
-				self::touch(
-					(int) $row->id,
-					array(
-						'share_url'    => $existing['url'],
-						'share_origin' => $existing['mode'] === 'internally' ? 'needs_passcode_internal' : 'needs_passcode',
-						'status'       => '',
-						'last_error'   => 'Zoom already shared this recording, but did not return the passcode.',
-					)
+				$fields = array(
+					'share_url'    => $existing['url'],
+					'share_origin' => $existing['mode'] === 'internally' ? 'needs_passcode_internal' : 'needs_passcode',
+					'status'       => '',
+					'last_error'   => 'Zoom already shared this recording, but did not return the passcode.',
 				);
+				if ( in_array( (string) ( $row->share_origin ?? '' ), array( '', 'created' ), true ) ) {
+					$fields['passcode'] = '';
+				}
+				self::touch( (int) $row->id, $fields );
+				return 'needs_passcode';
+			}
+			if ( trim( (string) $row->share_url ) !== '' ) {
+				$fields = array(
+					'last_error' => 'Zoom did not confirm the current passcode, so it was left unchanged.',
+				);
+				if ( in_array( (string) ( $row->share_origin ?? '' ), array( '', 'created' ), true ) ) {
+					$fields['passcode']     = '';
+					$fields['share_origin'] = 'needs_passcode';
+					$fields['status']       = '';
+					$fields['last_error']   = 'The saved passcode was not confirmed by Zoom. Enter the passcode from the Zoom share panel.';
+				}
+				self::touch( (int) $row->id, $fields );
 				return 'needs_passcode';
 			}
 		}
 
-		$passcode = ( ! $replace && trim( (string) $row->passcode ) !== '' )
-			? trim( (string) $row->passcode )
-			: HLZ_Zoom::generate_passcode();
+		$passcode = HLZ_Zoom::generate_passcode();
 
 		$published = HLZ_Zoom::publish_share( $meeting_id, $passcode );
 		if ( is_wp_error( $published ) ) {
@@ -192,6 +200,10 @@ class HLZ_Shares {
 		}
 
 		$share_url = trim( (string) ( $details['share_url'] ?? '' ) );
+		$confirmed = trim( (string) ( $details['password'] ?? '' ) );
+		if ( $confirmed !== '' ) {
+			$passcode = $confirmed;
+		}
 		if ( $share_url === '' ) {
 			$error = new WP_Error( 'hlz_share_url', 'Zoom did not return a share link for meeting ' . $meeting_id . '.' );
 			self::touch(
@@ -222,7 +234,18 @@ class HLZ_Shares {
 	/**
 	 * @return array{kept:int,created:int,needs_passcode:int}|WP_Error
 	 */
-	public static function prepare_event( int $eve_id ) {
+	public static function prepare_event( int $eve_id, array $meetings = array() ) {
+		if ( empty( $meetings ) ) {
+			$event = HLZ_Bridge::get_event( $eve_id );
+			if ( $event ) {
+				$window = HLZ_Matcher::window( $event );
+				$list   = HLZ_Zoom::list_recordings( $window['from'], $window['to'] );
+				if ( ! is_wp_error( $list ) ) {
+					$meetings = $list;
+				}
+			}
+		}
+		self::attach_uuids( $eve_id, $meetings );
 		$rows = self::for_event( $eve_id );
 		if ( empty( $rows ) ) {
 			return new WP_Error( 'hlz_prepare', 'Match a recording before preparing share links.' );
@@ -233,7 +256,7 @@ class HLZ_Shares {
 			'needs_passcode' => 0,
 		);
 		foreach ( $rows as $row ) {
-			if ( trim( (string) $row->meeting_id ) === '' || (string) $row->status === 'off' ) {
+			if ( self::api_meeting_id( $row ) === '' || (string) $row->status === 'off' ) {
 				continue;
 			}
 			$result = self::prepare( $row, false );
@@ -293,28 +316,128 @@ class HLZ_Shares {
 	}
 
 	/**
+	 * Point each saved row at one recording instance. The meeting number is reused;
+	 * the uuid is the specific day.
+	 *
+	 * @param array<int,array<string,mixed>> $meetings
+	 */
+	public static function attach_uuids( int $eve_id, array $meetings ): void {
+		if ( empty( $meetings ) ) {
+			return;
+		}
+		foreach ( self::for_event( $eve_id ) as $row ) {
+			if ( trim( (string) ( $row->meeting_uuid ?? '' ) ) !== '' ) {
+				continue;
+			}
+			$match = self::meeting_for_row( $row, $meetings );
+			if ( $match === null ) {
+				continue;
+			}
+			$date = HLZ_Bridge::zoom_local_date( (string) ( $match['start_time'] ?? '' ) );
+			$fields = array(
+				'meeting_id'   => (string) ( $match['id'] ?? $row->meeting_id ),
+				'meeting_uuid' => (string) ( $match['uuid'] ?? '' ),
+			);
+			if ( $date !== '' ) {
+				$fields['recording_date'] = $date;
+			}
+			self::touch( (int) $row->id, $fields );
+		}
+	}
+
+	/**
+	 * @param array<int,object> $rows
+	 * @return array<int,object>
+	 */
+	public static function in_date_order( array $rows ): array {
+		usort(
+			$rows,
+			static function ( $a, $b ) {
+				$da = (string) ( $a->recording_date ?? '' );
+				$db = (string) ( $b->recording_date ?? '' );
+				if ( $da !== '' && $db !== '' && $da !== $db ) {
+					return strcmp( $da, $db );
+				}
+				return (int) $a->day_index <=> (int) $b->day_index;
+			}
+		);
+		return $rows;
+	}
+
+	public static function api_meeting_id( object $row ): string {
+		$uuid = trim( (string) ( $row->meeting_uuid ?? '' ) );
+		if ( $uuid !== '' ) {
+			return $uuid;
+		}
+		return trim( (string) $row->meeting_id );
+	}
+
+	/**
+	 * @param array<int,array<string,mixed>> $meetings
+	 * @return array<string,mixed>|null
+	 */
+	private static function meeting_for_row( object $row, array $meetings ): ?array {
+		$stored_uuid = trim( (string) ( $row->meeting_uuid ?? '' ) );
+		$stored_id   = trim( (string) $row->meeting_id );
+		$want_date   = trim( (string) $row->recording_date );
+		$id_hits     = array();
+		foreach ( $meetings as $meeting ) {
+			if ( ! is_array( $meeting ) ) {
+				continue;
+			}
+			$uuid = trim( (string) ( $meeting['uuid'] ?? '' ) );
+			$id   = trim( (string) ( $meeting['id'] ?? '' ) );
+			if ( $stored_uuid !== '' && $uuid === $stored_uuid ) {
+				return $meeting;
+			}
+			if ( $stored_id !== '' && $id === $stored_id ) {
+				$id_hits[] = $meeting;
+			}
+		}
+		if ( count( $id_hits ) === 1 ) {
+			return $id_hits[0];
+		}
+		foreach ( $id_hits as $meeting ) {
+			$local = HLZ_Bridge::zoom_local_date( (string) ( $meeting['start_time'] ?? '' ) );
+			if ( $want_date !== '' && $local === $want_date ) {
+				return $meeting;
+			}
+		}
+		return null;
+	}
+
+	/**
 	 * @return array{url:string,passcode:string,mode:string,shared:bool}|WP_Error
 	 */
 	private static function read_existing_share( string $meeting_id ) {
 		$settings = HLZ_Zoom::get_recording_settings( $meeting_id );
-		if ( is_wp_error( $settings ) ) {
-			return $settings;
-		}
-		$details = HLZ_Zoom::get_meeting_recordings( $meeting_id );
-		if ( is_wp_error( $details ) ) {
+		$details  = HLZ_Zoom::get_meeting_recordings( $meeting_id );
+		if ( is_wp_error( $details ) && is_wp_error( $settings ) ) {
 			return $details;
 		}
-		$mode = strtolower( trim( (string) ( $settings['share_recording'] ?? '' ) ) );
-		$pass = trim( (string) ( $details['password'] ?? '' ) );
-		if ( $pass === '' ) {
+		$mode = '';
+		$pass = '';
+		$url  = '';
+		if ( ! is_wp_error( $settings ) ) {
+			$mode = strtolower( trim( (string) ( $settings['share_recording'] ?? '' ) ) );
 			$pass = trim( (string) ( $settings['password'] ?? '' ) );
 		}
-		$url = trim( (string) ( $details['share_url'] ?? '' ) );
+		if ( ! is_wp_error( $details ) ) {
+			$from_recording = trim( (string) ( $details['password'] ?? '' ) );
+			if ( $from_recording !== '' ) {
+				$pass = $from_recording;
+			}
+			$url = trim( (string) ( $details['share_url'] ?? '' ) );
+		}
+		if ( $url === '' && is_wp_error( $details ) ) {
+			return $details;
+		}
+		$sharing_on = $url !== '' && $mode !== 'none' && ( $mode === '' || in_array( $mode, array( 'publicly', 'internally' ), true ) );
 		return array(
 			'url'      => $url,
 			'passcode' => $pass,
 			'mode'     => $mode,
-			'shared'   => in_array( $mode, array( 'publicly', 'internally' ), true ) && $url !== '',
+			'shared'   => $sharing_on,
 		);
 	}
 
@@ -344,7 +467,7 @@ class HLZ_Shares {
 		if ( ! $row ) {
 			return new WP_Error( 'hlz_share', 'Recording not found.' );
 		}
-		$meeting_id = trim( (string) $row->meeting_id );
+		$meeting_id = self::api_meeting_id( $row );
 		$passcode   = trim( (string) $row->passcode );
 		if ( $passcode === '' ) {
 			$passcode = HLZ_Zoom::generate_passcode();
@@ -382,7 +505,7 @@ class HLZ_Shares {
 		if ( ! $row ) {
 			return new WP_Error( 'hlz_share', 'Recording not found.' );
 		}
-		$meeting_id = trim( (string) $row->meeting_id );
+		$meeting_id = self::api_meeting_id( $row );
 		if ( $meeting_id === '' ) {
 			return new WP_Error( 'hlz_share', 'This row has no Zoom meeting.' );
 		}
