@@ -1,6 +1,6 @@
 <?php
 /**
- * Fill a class template and send one plain-text message per registrant.
+ * Fill a class template and send one HTML message per registrant.
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -51,6 +51,16 @@ class HLZ_Mailer {
 	}
 
 	/**
+	 * Plain seeded letters become paragraphs so the editor can bold them.
+	 */
+	public static function body_for_editor( string $body ): string {
+		if ( self::is_html( $body ) ) {
+			return $body;
+		}
+		return wpautop( $body );
+	}
+
+	/**
 	 * @param array<int,object> $recordings keyed by day_index
 	 */
 	public static function render( object $template, array $event, array $recordings, string $note ): string {
@@ -59,19 +69,18 @@ class HLZ_Mailer {
 			(string) ( $event['eve_end'] ?? '' )
 		);
 		$class_name = (string) $template->label;
-		$body       = (string) $template->body;
+		$body       = self::body_for_editor( (string) $template->body );
+		$note_html  = trim( $note ) === '' ? '' : nl2br( esc_html( $note ) );
 
 		$body = str_replace(
 			array( '{class_name}', '{dates}', '{note}', '{zoom}' ),
-			array( $class_name, $dates, $note, self::zoom_block( $recordings ) ),
+			array( esc_html( $class_name ), esc_html( $dates ), $note_html, self::zoom_block( $recordings ) ),
 			$body
 		);
 
-		if ( trim( $note ) === '' ) {
-			$body = preg_replace( "/\n{3,}/", "\n\n", $body );
-		}
+		$body = preg_replace( '/<p>(?:\s|&nbsp;|<br\s*\/?>)*<\/p>/i', '', $body );
 
-		return trim( (string) $body ) . "\n";
+		return trim( (string) $body );
 	}
 
 	public static function render_subject( object $template, array $event ): string {
@@ -100,7 +109,7 @@ class HLZ_Mailer {
 			$ready[] = $row;
 		}
 		if ( empty( $ready ) ) {
-			return '(Share links appear here after they are prepared.)';
+			return esc_html( '(Share links appear here after they are prepared.)' );
 		}
 
 		$multi = false;
@@ -109,16 +118,20 @@ class HLZ_Mailer {
 				$multi = true;
 			}
 		}
-		$lines = array();
+		$blocks = array();
 		foreach ( $ready as $row ) {
+			$url   = esc_url( trim( (string) $row->share_url ) );
+			$label = esc_html( trim( (string) $row->share_url ) );
+			$pass  = esc_html( trim( (string) $row->passcode ) );
+			$html  = '';
 			if ( $multi ) {
-				$lines[] = 'Day ' . (int) $row->day_index . ':';
+				$html .= '<strong>Day ' . (int) $row->day_index . ':</strong><br>';
 			}
-			$lines[] = trim( (string) $row->share_url );
-			$lines[] = 'Passcode: ' . trim( (string) $row->passcode );
-			$lines[] = '';
+			$html    .= '<a href="' . $url . '">' . $label . '</a><br>';
+			$html    .= 'Passcode: ' . $pass;
+			$blocks[] = $html;
 		}
-		return trim( implode( "\n", $lines ) );
+		return implode( '<br><br>', $blocks );
 	}
 
 	/**
@@ -129,12 +142,8 @@ class HLZ_Mailer {
 	public static function send( array $event, object $template, array $recordings, array $recipients, string $note, bool $failures_only ): array {
 		$eve_id  = (int) $event['eve_id'];
 		$subject = self::render_subject( $template, $event );
-		$body    = self::render( $template, $event, $recordings, $note );
-		$from    = HLZ_Settings::get();
-		$headers = array(
-			'Content-Type: text/plain; charset=UTF-8',
-			'From: ' . self::from_header( $from['from_name'], $from['from_email'] ),
-		);
+		$body    = self::message_html( self::render( $template, $event, $recordings, $note ) );
+		$headers = self::headers();
 
 		$prior = array();
 		foreach ( HLZ_Shares::sends_for_event( $eve_id ) as $row ) {
@@ -180,6 +189,47 @@ class HLZ_Mailer {
 			'failed'  => $failed,
 			'skipped' => $skipped,
 		);
+	}
+
+	/**
+	 * One copy to a single address. Does not log a class send or start the share clock.
+	 *
+	 * @param array<int,object> $recordings
+	 * @return true|WP_Error
+	 */
+	public static function send_test( array $event, object $template, array $recordings, string $note, string $to ) {
+		$to = sanitize_email( $to );
+		if ( ! is_email( $to ) ) {
+			return new WP_Error( 'hlz_test', 'Enter a valid email address for the test.' );
+		}
+
+		$subject = '[Test] ' . self::render_subject( $template, $event );
+		$banner  = '<p><em>This is a test. It was not sent to the class, and it did not start the 30-day share clock.</em></p>';
+		$body    = self::message_html( $banner . self::render( $template, $event, $recordings, $note ) );
+		$ok      = wp_mail( $to, $subject, $body, self::headers() );
+		if ( ! $ok ) {
+			return new WP_Error( 'hlz_test', 'The test email did not send. Check SMTP2GO.' );
+		}
+		return true;
+	}
+
+	/**
+	 * @return array<int,string>
+	 */
+	private static function headers(): array {
+		$from = HLZ_Settings::get();
+		return array(
+			'Content-Type: text/html; charset=UTF-8',
+			'From: ' . self::from_header( $from['from_name'], $from['from_email'] ),
+		);
+	}
+
+	private static function message_html( string $body ): string {
+		return '<div style="font-family:Calibri,Arial,sans-serif;font-size:16px;line-height:1.45;color:#222;">' . $body . '</div>';
+	}
+
+	private static function is_html( string $body ): bool {
+		return (bool) preg_match( '/<(p|br|strong|b|em|i|u|a|ul|ol|li|div|span|h[1-6])\b/i', $body );
 	}
 
 	private static function from_header( string $name, string $email ): string {

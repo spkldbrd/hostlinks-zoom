@@ -63,6 +63,8 @@ class HLZ_Admin {
 			.hlz-actions form{margin:0}
 			.hlz-preview{width:100%;max-width:760px;min-height:420px;font-family:Consolas,monospace}
 			.hlz-note{width:100%;max-width:760px;min-height:80px}
+			.hlz-mail-preview{max-width:760px;background:#fff;border:1px solid #c3c4c7;padding:18px 20px}
+			.hlz-mail-preview a{word-break:break-all}
 			.hlz-body{width:100%;min-height:480px;font-family:Consolas,monospace}
 			.hlz-muted{color:#646970}
 			.hlz-status{display:inline-block;padding:1px 8px;border-radius:10px;background:#f0f0f1}
@@ -91,7 +93,7 @@ class HLZ_Admin {
 		$nonce_action = $action;
 		if ( $action === 'test_connection' ) {
 			$nonce_action = 'save_settings';
-		} elseif ( $action === 'resend_failures' || $action === 'update_preview' ) {
+		} elseif ( $action === 'resend_failures' || $action === 'update_preview' || $action === 'send_test' ) {
 			$nonce_action = 'send';
 		}
 		check_admin_referer( 'hlz_' . $nonce_action );
@@ -117,6 +119,9 @@ class HLZ_Admin {
 				break;
 			case 'update_preview':
 				self::post_update_preview();
+				break;
+			case 'send_test':
+				self::post_send_test();
 				break;
 			case 'send':
 				self::post_send( false );
@@ -148,8 +153,8 @@ class HLZ_Admin {
 	private static function post_save_template(): void {
 		$slug    = sanitize_key( wp_unslash( $_POST['slug'] ?? '' ) );
 		$subject = sanitize_text_field( wp_unslash( $_POST['subject'] ?? '' ) );
-		$body    = sanitize_textarea_field( wp_unslash( $_POST['body'] ?? '' ) );
-		if ( $subject === '' || $body === '' ) {
+		$body    = wp_kses_post( wp_unslash( $_POST['body'] ?? '' ) );
+		if ( $subject === '' || trim( wp_strip_all_tags( $body ) ) === '' ) {
 			self::redirect_template( $slug, 'Subject and body are required.', true );
 		}
 		$ok = HLZ_Templates::save( $slug, $subject, $body );
@@ -206,6 +211,29 @@ class HLZ_Admin {
 		$eve_id = absint( $_POST['eve_id'] ?? 0 );
 		HLZ_Mailer::remember_note( $eve_id, self::note_from_post() );
 		self::redirect_preview( $eve_id, 'Preview updated.' );
+	}
+
+	private static function post_send_test(): void {
+		$eve_id = absint( $_POST['eve_id'] ?? 0 );
+		$event  = HLZ_Bridge::get_event( $eve_id );
+		if ( ! $event ) {
+			self::redirect_list( self::days_from_request(), 'Class not found.', true );
+		}
+
+		$note = self::note_from_post();
+		HLZ_Mailer::remember_note( $eve_id, $note );
+
+		$template = HLZ_Mailer::template_for_event( $event );
+		if ( ! $template ) {
+			self::redirect_preview( $eve_id, 'Choose an email template for this class before sending a test.', true );
+		}
+
+		$to     = sanitize_email( wp_unslash( $_POST['hlz_test_email'] ?? '' ) );
+		$result = HLZ_Mailer::send_test( $event, $template, HLZ_Shares::for_event( $eve_id ), $note, $to );
+		if ( is_wp_error( $result ) ) {
+			self::redirect_preview( $eve_id, $result->get_error_message(), true );
+		}
+		self::redirect_preview( $eve_id, 'Test sent to ' . $to . '. The class was not emailed.' );
 	}
 
 	private static function post_send( bool $failures_only ): void {
@@ -380,7 +408,7 @@ class HLZ_Admin {
 
 		self::page_open( 'Email templates' );
 		self::render_flash();
-		echo '<div class="hlz-card"><p>One plain-text template per class type. <code>{zoom}</code> becomes the link and passcode. <code>{dates}</code> is the class date. <code>{note}</code> is the one-off message from the preview, and is removed when that box is empty. Paste each class type’s materials URL over <code>PASTE MATERIALS URL HERE</code>.</p>';
+		echo '<div class="hlz-card"><p>One template per class type. Use the bold button for emphasis. <code>{zoom}</code> becomes the link and passcode. <code>{dates}</code> is the class date. <code>{note}</code> is the one-off message from the preview, and is removed when that box is empty. Paste each class type’s materials URL over <code>PASTE MATERIALS URL HERE</code>.</p>';
 		echo '<ul>';
 		foreach ( $templates as $template ) {
 			$url = add_query_arg(
@@ -405,8 +433,23 @@ class HLZ_Admin {
 			echo '<input type="hidden" name="slug" value="' . esc_attr( $current->slug ) . '">';
 			echo '<p><label for="hlz-subject"><strong>Subject</strong></label><br>';
 			echo '<input id="hlz-subject" name="subject" type="text" class="regular-text" style="width:100%;max-width:760px" value="' . esc_attr( $current->subject ) . '"></p>';
-			echo '<p><label for="hlz-body"><strong>Body</strong></label><br>';
-			echo '<textarea id="hlz-body" name="body" class="hlz-body">' . esc_textarea( $current->body ) . '</textarea></p>';
+			echo '<p><strong>Body</strong></p>';
+			wp_editor(
+				HLZ_Mailer::body_for_editor( (string) $current->body ),
+				'hlzbody',
+				array(
+					'textarea_name' => 'body',
+					'textarea_rows' => 22,
+					'media_buttons' => false,
+					'teeny'         => false,
+					'quicktags'     => true,
+					'tinymce'       => array(
+						'toolbar1'     => 'bold,italic,link,unlink,bullist,numlist,undo,redo',
+						'toolbar2'     => '',
+						'block_formats'=> 'Paragraph=p',
+					),
+				)
+			);
 			submit_button( 'Save template' );
 			echo '</form></div>';
 		}
@@ -526,15 +569,25 @@ class HLZ_Admin {
 		} else {
 			echo '<p><strong>From:</strong> ' . esc_html( HLZ_Settings::get()['from_name'] . ' <' . HLZ_Settings::get()['from_email'] . '>' ) . '</p>';
 			echo '<p><strong>Subject:</strong> ' . esc_html( HLZ_Mailer::render_subject( $template, $event ) ) . '</p>';
+			$preview = HLZ_Mailer::render( $template, $event, $rows, $note );
+			$me      = wp_get_current_user();
 			echo '<form method="post">';
 			wp_nonce_field( 'hlz_send' );
 			echo '<input type="hidden" name="eve_id" value="' . esc_attr( (string) $eve_id ) . '">';
 			echo '<p><label for="hlz-note"><strong>Special message</strong></label><br>';
 			echo '<textarea id="hlz-note" name="hlz_note" class="hlz-note">' . esc_textarea( $note ) . '</textarea></p>';
-			echo '<p><label for="hlz-preview"><strong>Preview</strong></label><br>';
-			echo '<textarea id="hlz-preview" class="hlz-preview" readonly>' . esc_textarea( HLZ_Mailer::render( $template, $event, $rows, $note ) ) . '</textarea></p>';
+			echo '<p><strong>Preview</strong></p>';
+			echo '<div class="hlz-mail-preview">' . wp_kses_post( $preview ) . '</div>';
+			echo '<p class="hlz-actions" style="margin-top:12px">';
+			echo '<button type="submit" class="button" name="hlz_action" value="update_preview">Update preview</button>';
+			echo '</p>';
 			echo '<p class="hlz-actions">';
-			echo '<button type="submit" class="button" name="hlz_action" value="update_preview">Update preview</button> ';
+			echo '<label for="hlz-test-email">Test address</label> ';
+			echo '<input id="hlz-test-email" name="hlz_test_email" type="email" class="regular-text" value="' . esc_attr( (string) $me->user_email ) . '"> ';
+			echo '<button type="submit" class="button" name="hlz_action" value="send_test">Send test</button>';
+			echo '</p>';
+			echo '<p class="hlz-muted">The test goes only to that address. It does not email the class and does not start the 30-day clock.</p>';
+			echo '<p class="hlz-actions">';
 			echo '<button type="submit" class="button button-primary" name="hlz_action" value="send">Send</button> ';
 			echo '<button type="submit" class="button" name="hlz_action" value="resend_failures">Resend failures</button>';
 			echo '</p>';
