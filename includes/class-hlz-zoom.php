@@ -212,6 +212,17 @@ class HLZ_Zoom {
 	}
 
 	/**
+	 * @return array<string,mixed>|WP_Error
+	 */
+	public static function get_recording_settings( string $meeting_id ) {
+		$meeting_id = trim( $meeting_id );
+		if ( $meeting_id === '' ) {
+			return new WP_Error( 'hlz_zoom_meeting', 'Meeting ID is missing.' );
+		}
+		return self::request( 'GET', '/meetings/' . self::encode_meeting_id( $meeting_id ) . '/recordings/settings' );
+	}
+
+	/**
 	 * Public link, passcode, no download, no registration.
 	 *
 	 * @return true|WP_Error

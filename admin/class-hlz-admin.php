@@ -95,6 +95,8 @@ class HLZ_Admin {
 			$nonce_action = 'save_settings';
 		} elseif ( $action === 'resend_failures' || $action === 'update_preview' || $action === 'send_test' ) {
 			$nonce_action = 'send';
+		} elseif ( $action === 'replace_passcode' || $action === 'save_passcode' ) {
+			$nonce_action = 'passcode';
 		}
 		check_admin_referer( 'hlz_' . $nonce_action );
 
@@ -113,6 +115,12 @@ class HLZ_Admin {
 				break;
 			case 'save_match':
 				self::post_save_match();
+				break;
+			case 'save_passcode':
+				self::post_save_passcode();
+				break;
+			case 'replace_passcode':
+				self::post_replace_passcode();
 				break;
 			case 'prepare':
 				self::post_prepare();
@@ -204,7 +212,53 @@ class HLZ_Admin {
 		if ( is_wp_error( $result ) ) {
 			self::redirect_preview( $eve_id, $result->get_error_message(), true );
 		}
-		self::redirect_preview( $eve_id, 'Share links are ready. The 30-day clock starts when you send.' );
+		$needs = ! empty( $result['needs_passcode'] );
+		self::redirect_preview( $eve_id, self::prepare_message( $result ), $needs );
+	}
+
+	/**
+	 * @param array{kept:int,created:int,needs_passcode:int} $result
+	 */
+	private static function prepare_message( array $result ): string {
+		$parts = array();
+		if ( ! empty( $result['kept'] ) ) {
+			$parts[] = 'Zoom already had a share with a passcode, so that link was left unchanged.';
+		}
+		if ( ! empty( $result['created'] ) ) {
+			$parts[] = 'A new share link was created.';
+		}
+		if ( ! empty( $result['needs_passcode'] ) ) {
+			$parts[] = 'Zoom already shared a recording but did not return the passcode. Enter it below, or create a new one.';
+		}
+		if ( empty( $parts ) ) {
+			return 'Share links are ready. The 30-day clock starts when you send to the class.';
+		}
+		return implode( ' ', $parts );
+	}
+
+	private static function post_save_passcode(): void {
+		$eve_id = absint( $_POST['eve_id'] ?? 0 );
+		$result = HLZ_Shares::save_known_passcode(
+			absint( $_POST['recording_id'] ?? 0 ),
+			sanitize_text_field( wp_unslash( $_POST['passcode'] ?? '' ) )
+		);
+		if ( is_wp_error( $result ) ) {
+			self::redirect_preview( $eve_id, $result->get_error_message(), true );
+		}
+		self::redirect_preview( $eve_id, 'Existing passcode saved. Zoom was not changed.' );
+	}
+
+	private static function post_replace_passcode(): void {
+		$eve_id = absint( $_POST['eve_id'] ?? 0 );
+		$row    = HLZ_Shares::get( absint( $_POST['recording_id'] ?? 0 ) );
+		if ( ! $row ) {
+			self::redirect_preview( $eve_id, 'Recording not found.', true );
+		}
+		$result = HLZ_Shares::prepare( $row, true );
+		if ( is_wp_error( $result ) ) {
+			self::redirect_preview( $eve_id, $result->get_error_message(), true );
+		}
+		self::redirect_preview( $eve_id, 'A new passcode was created. The previous Zoom passcode no longer works.' );
 	}
 
 	private static function post_update_preview(): void {
@@ -261,7 +315,19 @@ class HLZ_Admin {
 
 		$rows = HLZ_Shares::for_event( $eve_id );
 		if ( ! self::links_ready( $event, $rows ) ) {
-			self::redirect_preview( $eve_id, 'Each day of this class needs a share link before sending.', true );
+			$needs_passcode = false;
+			foreach ( $rows as $row ) {
+				if ( in_array( (string) ( $row->share_origin ?? '' ), array( 'needs_passcode', 'needs_passcode_internal' ), true ) ) {
+					$needs_passcode = true;
+				}
+			}
+			self::redirect_preview(
+				$eve_id,
+				$needs_passcode
+					? 'Enter the existing Zoom passcode before sending to the class.'
+					: 'Each day of this class needs a share link before sending.',
+				true
+			);
 		}
 
 		$people = HLZ_Recipients::for_event( $event );
@@ -467,8 +533,9 @@ class HLZ_Admin {
 		echo '<p>Create a Server-to-Server OAuth app in the Zoom App Marketplace. Give it these scopes:</p>';
 		echo '<ul><li><code>cloud_recording:read:list_user_recordings:admin</code></li>';
 		echo '<li><code>cloud_recording:read:list_recording_files:admin</code></li>';
+		echo '<li><code>cloud_recording:read:recording_settings:admin</code></li>';
 		echo '<li><code>cloud_recording:update:recording_settings:admin</code></li></ul>';
-		echo '<p>The Zoom role also needs permission to view recording content, or the passcode update is rejected. Viewers can see the chat is an account setting for newly generated recordings. Zoom’s per-recording API cannot turn that on.</p>';
+		echo '<p>The Zoom role also needs permission to view recording content. That permission lets the plugin read an existing passcode instead of replacing it. Viewers can see the chat is an account setting for newly generated recordings. Zoom’s per-recording API cannot turn that on.</p>';
 		echo '<form method="post">';
 		wp_nonce_field( 'hlz_save_settings' );
 		echo '<input type="hidden" name="hlz_form" value="settings">';
@@ -517,6 +584,8 @@ class HLZ_Admin {
 			}
 			$rows = HLZ_Shares::for_event( $eve_id );
 		}
+
+		self::render_existing_share_notice( $rows );
 
 		$choices = HLZ_Matcher::dropdown_meetings( $event, $meetings );
 
@@ -654,6 +723,9 @@ class HLZ_Admin {
 				echo '<span class="hlz-status hlz-status-' . esc_attr( (string) $row->status ) . '">' . esc_html( self::status_label( (string) $row->status ) ) . '</span><br>';
 				echo '<a href="' . esc_url( (string) $row->share_url ) . '">' . esc_html( (string) $row->share_url ) . '</a>';
 				echo '<br>Passcode: ' . esc_html( (string) $row->passcode );
+				if ( in_array( (string) ( $row->share_origin ?? '' ), array( 'existing', 'existing_internal' ), true ) ) {
+					echo '<br><span class="hlz-muted">Existing Zoom share kept.</span>';
+				}
 				if ( (string) $row->expires_at !== '' ) {
 					echo '<br>Expires ' . esc_html( (string) $row->expires_at );
 				}
@@ -670,7 +742,71 @@ class HLZ_Admin {
 		}
 		echo '</tbody></table>';
 		submit_button( 'Save recording choice' );
-		echo '</form></div>';
+		echo '</form>';
+		self::render_passcode_forms( $rows );
+		echo '</div>';
+	}
+
+	/**
+	 * @param array<int,object> $rows
+	 */
+	private static function render_existing_share_notice( array $rows ): void {
+		$kept     = false;
+		$internal = false;
+		$needs    = false;
+		foreach ( $rows as $row ) {
+			$origin = (string) ( $row->share_origin ?? '' );
+			if ( $origin === 'existing' || $origin === 'existing_internal' ) {
+				$kept = true;
+			}
+			if ( $origin === 'existing_internal' || $origin === 'needs_passcode_internal' ) {
+				$internal = true;
+			}
+			if ( $origin === 'needs_passcode' || $origin === 'needs_passcode_internal' ) {
+				$needs = true;
+			}
+		}
+		if ( $kept ) {
+			echo '<div class="notice notice-info"><p>Zoom already shared this recording with a passcode. That link and passcode were left unchanged.</p></div>';
+		}
+		if ( $internal ) {
+			echo '<div class="notice notice-warning"><p>Zoom has this share limited to people in your Zoom account. Attendees outside the account may not be able to open it.</p></div>';
+		}
+		if ( $needs ) {
+			echo '<div class="notice notice-warning"><p>Zoom already shared this recording, but the passcode could not be read. Enter the current passcode, or create a new one. A new passcode replaces the one already in Zoom.</p></div>';
+		}
+	}
+
+	/**
+	 * @param array<int,object> $rows
+	 */
+	private static function render_passcode_forms( array $rows ): void {
+		foreach ( $rows as $row ) {
+			$origin = (string) ( $row->share_origin ?? '' );
+			$needs  = $origin === 'needs_passcode' || $origin === 'needs_passcode_internal';
+			if ( ! $needs && ! in_array( $origin, array( 'existing', 'existing_internal' ), true ) ) {
+				continue;
+			}
+			echo '<div style="margin-top:12px">';
+			echo '<strong>Day ' . (int) $row->day_index . '</strong>';
+			if ( $needs ) {
+				echo '<form method="post" class="hlz-actions" style="margin-top:6px">';
+				wp_nonce_field( 'hlz_passcode' );
+				echo '<input type="hidden" name="hlz_action" value="save_passcode">';
+				echo '<input type="hidden" name="eve_id" value="' . esc_attr( (string) (int) $row->eve_id ) . '">';
+				echo '<input type="hidden" name="recording_id" value="' . esc_attr( (string) (int) $row->id ) . '">';
+				echo '<input type="text" name="passcode" placeholder="Existing passcode" autocomplete="off"> ';
+				echo '<button type="submit" class="button">Use this passcode</button>';
+				echo '</form>';
+			}
+			echo '<form method="post" style="margin-top:6px">';
+			wp_nonce_field( 'hlz_passcode' );
+			echo '<input type="hidden" name="hlz_action" value="replace_passcode">';
+			echo '<input type="hidden" name="eve_id" value="' . esc_attr( (string) (int) $row->eve_id ) . '">';
+			echo '<input type="hidden" name="recording_id" value="' . esc_attr( (string) (int) $row->id ) . '">';
+			echo '<button type="submit" class="button" onclick="return confirm(\'This replaces the passcode already in Zoom. The old passcode will stop working.\');">Create a new passcode</button>';
+			echo '</form></div>';
+		}
 	}
 
 	/**

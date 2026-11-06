@@ -83,6 +83,7 @@ class HLZ_DB {
 				recording_date date DEFAULT NULL,
 				share_url text NULL,
 				passcode varchar(20) NOT NULL DEFAULT '',
+				share_origin varchar(32) NOT NULL DEFAULT '',
 				match_source varchar(20) NOT NULL DEFAULT '',
 				prepared_at datetime DEFAULT NULL,
 				sent_at datetime DEFAULT NULL,

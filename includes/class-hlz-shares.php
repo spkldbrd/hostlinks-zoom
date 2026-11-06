@@ -125,20 +125,48 @@ class HLZ_Shares {
 	}
 
 	/**
-	 * Turn sharing on, store the URL and passcode. Does not start the 30-day clock.
+	 * Turn sharing on, or keep a share Zoom already has.
 	 *
-	 * @return true|WP_Error
+	 * @param bool $replace Create a new passcode even when Zoom already has one.
+	 * @return string|WP_Error kept, created, unchanged, or needs_passcode
 	 */
-	public static function prepare( object $row ) {
+	public static function prepare( object $row, bool $replace = false ) {
 		$meeting_id = trim( (string) $row->meeting_id );
 		if ( $meeting_id === '' ) {
 			return new WP_Error( 'hlz_prepare', 'Choose a recording before preparing a share link.' );
 		}
 
-		$passcode = trim( (string) $row->passcode );
-		if ( $passcode === '' ) {
-			$passcode = HLZ_Zoom::generate_passcode();
+		if ( ! $replace && trim( (string) $row->share_url ) !== '' && trim( (string) $row->passcode ) !== '' ) {
+			return 'unchanged';
 		}
+
+		if ( ! $replace ) {
+			$existing = self::read_existing_share( $meeting_id );
+			if ( is_wp_error( $existing ) ) {
+				self::touch( (int) $row->id, array( 'last_error' => self::trim_error( $existing->get_error_message() ) ) );
+				return $existing;
+			}
+			if ( $existing['shared'] && $existing['passcode'] !== '' ) {
+				self::store_existing_share( $row, $existing );
+				return 'kept';
+			}
+			if ( $existing['shared'] ) {
+				self::touch(
+					(int) $row->id,
+					array(
+						'share_url'    => $existing['url'],
+						'share_origin' => $existing['mode'] === 'internally' ? 'needs_passcode_internal' : 'needs_passcode',
+						'status'       => '',
+						'last_error'   => 'Zoom already shared this recording, but did not return the passcode.',
+					)
+				);
+				return 'needs_passcode';
+			}
+		}
+
+		$passcode = ( ! $replace && trim( (string) $row->passcode ) !== '' )
+			? trim( (string) $row->passcode )
+			: HLZ_Zoom::generate_passcode();
 
 		$published = HLZ_Zoom::publish_share( $meeting_id, $passcode );
 		if ( is_wp_error( $published ) ) {
@@ -180,42 +208,132 @@ class HLZ_Shares {
 		self::touch(
 			(int) $row->id,
 			array(
-				'share_url'   => $share_url,
-				'passcode'    => $passcode,
-				'prepared_at' => current_time( 'mysql' ),
-				'status'      => $status,
-				'last_error'  => '',
+				'share_url'    => $share_url,
+				'passcode'     => $passcode,
+				'share_origin' => 'created',
+				'prepared_at'  => current_time( 'mysql' ),
+				'status'       => $status,
+				'last_error'   => '',
 			)
 		);
-		return true;
+		return 'created';
 	}
 
 	/**
-	 * @return true|WP_Error
+	 * @return array{kept:int,created:int,needs_passcode:int}|WP_Error
 	 */
 	public static function prepare_event( int $eve_id ) {
 		$rows = self::for_event( $eve_id );
 		if ( empty( $rows ) ) {
 			return new WP_Error( 'hlz_prepare', 'Match a recording before preparing share links.' );
 		}
-		$prepared = 0;
+		$summary = array(
+			'kept'           => 0,
+			'created'        => 0,
+			'needs_passcode' => 0,
+		);
 		foreach ( $rows as $row ) {
-			if ( trim( (string) $row->meeting_id ) === '' ) {
+			if ( trim( (string) $row->meeting_id ) === '' || (string) $row->status === 'off' ) {
 				continue;
 			}
-			if ( (string) $row->status === 'off' ) {
-				continue;
-			}
-			$result = self::prepare( $row );
+			$result = self::prepare( $row, false );
 			if ( is_wp_error( $result ) ) {
 				return $result;
 			}
-			$prepared++;
+			if ( $result === 'kept' ) {
+				$summary['kept']++;
+			} elseif ( $result === 'created' ) {
+				$summary['created']++;
+			} elseif ( $result === 'needs_passcode' ) {
+				$summary['needs_passcode']++;
+			}
 		}
-		if ( $prepared === 0 ) {
-			return new WP_Error( 'hlz_prepare', 'No matched recording is ready to share. A turned-off link stays off until you extend it.' );
+		if ( $summary['kept'] + $summary['created'] + $summary['needs_passcode'] === 0 ) {
+			$any = false;
+			foreach ( $rows as $row ) {
+				if ( trim( (string) $row->share_url ) !== '' && trim( (string) $row->passcode ) !== '' ) {
+					$any = true;
+				}
+			}
+			if ( ! $any ) {
+				return new WP_Error( 'hlz_prepare', 'No matched recording is ready to share. A turned-off link stays off until you extend it.' );
+			}
 		}
+		return $summary;
+	}
+
+	/**
+	 * Save a passcode the user already knows. Does not change Zoom.
+	 *
+	 * @return true|WP_Error
+	 */
+	public static function save_known_passcode( int $id, string $passcode ) {
+		$row = self::get( $id );
+		if ( ! $row ) {
+			return new WP_Error( 'hlz_share', 'Recording not found.' );
+		}
+		$passcode = trim( $passcode );
+		if ( strlen( $passcode ) < 8 ) {
+			return new WP_Error( 'hlz_share', 'Enter the existing Zoom passcode. It is at least 8 characters.' );
+		}
+		$origin = in_array( (string) $row->share_origin, array( 'existing_internal', 'needs_passcode_internal' ), true )
+			? 'existing_internal'
+			: 'existing';
+		self::touch(
+			$id,
+			array(
+				'passcode'     => $passcode,
+				'share_origin' => $origin,
+				'status'       => ( (string) $row->sent_at !== '' ) ? 'shared' : 'prepared',
+				'prepared_at'  => (string) $row->prepared_at !== '' ? (string) $row->prepared_at : current_time( 'mysql' ),
+				'last_error'   => '',
+			)
+		);
 		return true;
+	}
+
+	/**
+	 * @return array{url:string,passcode:string,mode:string,shared:bool}|WP_Error
+	 */
+	private static function read_existing_share( string $meeting_id ) {
+		$settings = HLZ_Zoom::get_recording_settings( $meeting_id );
+		if ( is_wp_error( $settings ) ) {
+			return $settings;
+		}
+		$details = HLZ_Zoom::get_meeting_recordings( $meeting_id );
+		if ( is_wp_error( $details ) ) {
+			return $details;
+		}
+		$mode = strtolower( trim( (string) ( $settings['share_recording'] ?? '' ) ) );
+		$pass = trim( (string) ( $details['password'] ?? '' ) );
+		if ( $pass === '' ) {
+			$pass = trim( (string) ( $settings['password'] ?? '' ) );
+		}
+		$url = trim( (string) ( $details['share_url'] ?? '' ) );
+		return array(
+			'url'      => $url,
+			'passcode' => $pass,
+			'mode'     => $mode,
+			'shared'   => in_array( $mode, array( 'publicly', 'internally' ), true ) && $url !== '',
+		);
+	}
+
+	/**
+	 * @param array{url:string,passcode:string,mode:string,shared:bool} $existing
+	 */
+	private static function store_existing_share( object $row, array $existing ): void {
+		$origin = $existing['mode'] === 'internally' ? 'existing_internal' : 'existing';
+		self::touch(
+			(int) $row->id,
+			array(
+				'share_url'    => $existing['url'],
+				'passcode'     => $existing['passcode'],
+				'share_origin' => $origin,
+				'prepared_at'  => current_time( 'mysql' ),
+				'status'       => ( (string) $row->sent_at !== '' ) ? 'shared' : 'prepared',
+				'last_error'   => '',
+			)
+		);
 	}
 
 	/**
