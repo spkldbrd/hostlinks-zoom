@@ -1,0 +1,112 @@
+---
+description: How to commit, version, and publish Hostlinks Zoom (git + GitHub release zip)
+alwaysApply: true
+---
+
+# Hostlinks Zoom — Git commits and GitHub releases
+
+Use this whenever you ship changes to **this repository**. The in-plugin auto-updater reads **GitHub Releases** (`releases/latest`) and the release asset **`hostlinks-zoom.zip`**.
+
+## Repository root
+
+This directory is the Git repo root (`hostlinks-zoom.php`, `.github/workflows/`, etc.).
+
+- Remote: `https://github.com/spkldbrd/hostlinks-zoom`
+- Default branch: `main`
+
+Run **git** and manual **zip** steps from here (or `git -C <path>`).
+
+---
+
+## Step 1 — Bump the version
+
+Edit **both** places in `hostlinks-zoom.php`:
+
+```php
+ * Version:     1.0.0
+...
+define( 'HLZ_VERSION', '1.0.0' );
+```
+
+Bump **`HLZ_DB_VERSION`** only when the database schema changes.
+
+---
+
+## Step 2 — Commit and push (PowerShell)
+
+**Do not use `&&` or bash heredocs** — use separate lines or `;` in PowerShell.
+
+```powershell
+Set-Location "c:\cursor\Hostlinks 2.0\wp-content\plugins\hostlinks-zoom"
+$msg = "fix: short description (v1.X.X)"
+git add -A
+git commit -m $msg
+git push origin main
+```
+
+Prefer **Conventional Commits** (`fix:`, `feat:`, `ci:`, `docs:`) and mention the version when useful.
+
+---
+
+## Step 3 — Release zip (default: GitHub Actions)
+
+A push to **`main`** runs [`.github/workflows/release-zip.yml`](.github/workflows/release-zip.yml):
+
+1. Parses **`HLZ_VERSION`** from `hostlinks-zoom.php`.
+2. Builds **`hostlinks-zoom.zip`** with top-level folder **`hostlinks-zoom/`** and Unix-style paths.
+3. **Creates** a GitHub Release for that version if missing, or **`gh release upload --clobber`** to replace the zip on an existing release.
+
+**Excluded from the zip:** `.git`, `.github`, `.cursor`, `build/`, stray `hostlinks-zoom.zip`.
+
+Verify on GitHub: **Actions** job green, **Releases** shows the zip. Opening a Hostlinks Zoom admin screen clears the update cache.
+
+**Agents:** after bumping the version, **always commit and push**. Do not stop before `git push` — that is what builds the auto-update.
+
+---
+
+## Step 4 — Manual zip + release (fallback)
+
+If Actions is down. Use **.NET `ZipFile`**, not **`Compress-Archive`**, so entry names use **`/`**.
+
+```powershell
+$pluginDir = "c:\cursor\Hostlinks 2.0\wp-content\plugins\hostlinks-zoom"
+$zipPath   = "c:\cursor\Hostlinks 2.0\wp-content\plugins\hostlinks-zoom.zip"
+if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$zip = [System.IO.Compression.ZipFile]::Open($zipPath, 'Create')
+Get-ChildItem -Path $pluginDir -Recurse -File | Where-Object {
+    $p = $_.FullName
+    $p -notmatch '[\\/]\.git[\\/]' -and $p -notmatch '[\\/]\.github[\\/]' -and $p -notmatch '[\\/]\.cursor[\\/]'
+} | ForEach-Object {
+    $relative = $_.FullName.Substring($pluginDir.Length + 1).Replace('\', '/')
+    $entry    = "hostlinks-zoom/$relative"
+    [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $_.FullName, $entry, 'Optimal') | Out-Null
+}
+$zip.Dispose()
+```
+
+```powershell
+Set-Location "c:\cursor\Hostlinks 2.0\wp-content\plugins\hostlinks-zoom"
+gh release create 1.X.X $zipPath --title "v1.X.X" --notes "…"
+# gh release upload 1.X.X $zipPath --clobber
+```
+
+---
+
+## Semver
+
+**Default to PATCH** — bump the third decimal (`x.x.X`) for almost everything.
+
+| Bump | When |
+|------|------|
+| **PATCH** `x.x.X` | Default — fixes, copy, small UI, new fields, incremental features |
+| MINOR `x.X.0` | Significant new feature or larger behavior change |
+| MAJOR `X.0.0` | Breaking change or major architecture overhaul |
+
+---
+
+## Agent checklist
+
+1. Header `Version:` and `HLZ_VERSION` match
+2. `git add -A` → commit → **`push origin main`**
+3. Confirm Actions run and `hostlinks-zoom.zip` is on the GitHub Release

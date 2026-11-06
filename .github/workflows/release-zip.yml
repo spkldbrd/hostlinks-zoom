@@ -1,0 +1,59 @@
+# Build hostlinks-zoom.zip and attach it to a GitHub Release on every push to main.
+# Release tag matches HLZ_VERSION in hostlinks-zoom.php. If that release already
+# exists, the zip asset is replaced (--clobber).
+
+name: Release plugin ZIP
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read HLZ_VERSION
+        id: version
+        run: |
+          VER=$(sed -n "s/.*define( 'HLZ_VERSION',[[:space:]]*'\([^']*\)'.*/\1/p" hostlinks-zoom.php | head -1)
+          if [ -z "$VER" ]; then
+            echo "::error::Could not parse HLZ_VERSION from hostlinks-zoom.php"
+            exit 1
+          fi
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "Building release $VER"
+
+      - name: Assemble plugin folder and zip
+        run: |
+          mkdir -p build/hostlinks-zoom
+          rsync -a \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='.cursor' \
+            --exclude='build' \
+            --exclude='hostlinks-zoom.zip' \
+            ./ build/hostlinks-zoom/
+          (cd build && zip -rq "$GITHUB_WORKSPACE/hostlinks-zoom.zip" hostlinks-zoom)
+          ls -la hostlinks-zoom.zip
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          ZIP="$GITHUB_WORKSPACE/hostlinks-zoom.zip"
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            echo "Release $VERSION exists — replacing zip asset"
+            gh release upload "$VERSION" "$ZIP" --clobber
+          else
+            echo "Creating release $VERSION"
+            gh release create "$VERSION" "$ZIP" \
+              --title "$VERSION" \
+              --generate-notes
+          fi

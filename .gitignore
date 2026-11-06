@@ -1,0 +1,16 @@
+# WordPress
+*.log
+hostlinks-zoom.zip
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Build output
+/build/
