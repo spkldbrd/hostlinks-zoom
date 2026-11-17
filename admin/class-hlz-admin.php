@@ -58,12 +58,24 @@ class HLZ_Admin {
 		}
 		echo '<style>
 			.hlz-wrap .hlz-card{background:#fff;border:1px solid #c3c4c7;padding:16px 18px;margin:16px 0}
+			.hlz-wrap .hlz-card h2{margin-top:0}
 			.hlz-wrap table.widefat td,.hlz-wrap table.widefat th{vertical-align:top}
 			.hlz-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 			.hlz-actions form{margin:0}
+			.hlz-preview-grid{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(280px,.85fr);gap:16px;align-items:start;margin:16px 0}
+			.hlz-preview-grid>.hlz-card{margin:0}
+			.hlz-title-card{padding:12px 16px}
+			.hlz-title-card h2{margin:0 0 4px}
+			.hlz-title-card p{margin:0}
+			.hlz-title-card .hlz-muted{margin-top:6px}
 			.hlz-preview{width:100%;max-width:760px;min-height:420px;font-family:Consolas,monospace}
-			.hlz-note{width:100%;max-width:760px;min-height:80px}
-			.hlz-mail-preview{max-width:760px;background:#fff;border:1px solid #c3c4c7;padding:18px 20px;font-family:Calibri,Arial,sans-serif;font-size:16px;line-height:1.45;color:#222}
+			.hlz-note{width:100%;min-height:56px}
+			.hlz-mail-preview{max-width:100%;background:#fff;border:1px solid #c3c4c7;padding:14px 16px;font-family:Calibri,Arial,sans-serif;font-size:15px;line-height:1.4;color:#222}
+			.hlz-attendees-scroll{max-height:520px;overflow:auto}
+			.hlz-attendees-scroll table{font-size:13px}
+			.hlz-recordings-card table.widefat td,.hlz-recordings-card table.widefat th{padding:6px 8px;vertical-align:middle}
+			.hlz-recordings-card select{width:100%;max-width:100%}
+			@media (max-width:1100px){.hlz-preview-grid{grid-template-columns:1fr}}
 			.hlz-mail-preview p{margin:0 0 1em}
 			.hlz-mail-preview p:last-child{margin-bottom:0}
 			.hlz-mail-preview a{word-break:break-all}
@@ -659,17 +671,73 @@ class HLZ_Admin {
 
 		$title = HLZ_Bridge::event_title( $event );
 		$dates = HLZ_Bridge::format_date_range( (string) $event['eve_start'], (string) $event['eve_end'] );
-		echo '<p><a href="' . esc_url( admin_url( 'admin.php?page=hostlinks-zoom' ) ) . '">&larr; All classes</a></p>';
-		echo '<div class="hlz-card"><h2>' . esc_html( $title ) . '</h2>';
+		$past  = add_query_arg(
+			array(
+				'page' => 'hostlinks-zoom',
+				'tab'  => 'past',
+			),
+			admin_url( 'admin.php' )
+		);
+		echo '<p><a href="' . esc_url( $past ) . '">&larr; Past classes</a></p>';
+		echo '<div class="hlz-card hlz-title-card">';
+		echo '<h2>' . esc_html( $title ) . '</h2>';
 		echo '<p>' . esc_html( $dates ) . ' · ' . esc_html( self::recording_count_label( $event ) ) . '</p>';
-		echo '<p class="hlz-muted">Share settings: anyone with the link, passcode required, download off, no registration to watch. The 30 days start when you press Send.</p>';
+		echo '<p class="hlz-muted">Anyone with the link can watch (passcode required). Downloads off. The 30 days start when you press Send.</p>';
 		echo '</div>';
 
+		echo '<div class="hlz-preview-grid">';
+		echo '<div class="hlz-card">';
 		self::render_template_picker( $event );
+		self::render_email_panel( $event, $rows );
+		echo '</div>';
+		self::render_attendees_panel( $event );
+		echo '</div>';
+
 		self::render_match_form( $event, $rows, $choices );
 		self::render_link_summary( $event, $rows );
+		self::page_close();
+	}
 
+	/**
+	 * @param array<int,object> $rows
+	 */
+	private static function render_email_panel( array $event, array $rows ): void {
+		$eve_id   = (int) $event['eve_id'];
 		$template = HLZ_Mailer::template_for_event( $event );
+		$note     = HLZ_Mailer::remembered_note( $eve_id );
+
+		echo '<h2>Email preview</h2>';
+		if ( ! $template ) {
+			echo '<p>No template matches this class title. Choose one above, or add the class phrase to the Cvent title.</p>';
+			return;
+		}
+
+		echo '<p style="margin:0 0 8px"><strong>From:</strong> ' . esc_html( HLZ_Settings::get()['from_name'] . ' <' . HLZ_Settings::get()['from_email'] . '>' ) . '<br>';
+		echo '<strong>Subject:</strong> ' . esc_html( HLZ_Mailer::render_subject( $template, $event ) ) . '</p>';
+		$preview = HLZ_Mailer::render( $template, $event, $rows, $note );
+		$me      = wp_get_current_user();
+		echo '<form method="post">';
+		wp_nonce_field( 'hlz_send' );
+		echo '<input type="hidden" name="eve_id" value="' . esc_attr( (string) $eve_id ) . '">';
+		echo '<p style="margin:0 0 8px"><label for="hlz-note"><strong>Special message</strong></label><br>';
+		echo '<textarea id="hlz-note" name="hlz_note" class="hlz-note">' . esc_textarea( $note ) . '</textarea></p>';
+		echo '<div class="hlz-mail-preview">' . wp_kses_post( $preview ) . '</div>';
+		echo '<p class="hlz-actions" style="margin-top:10px">';
+		echo '<button type="submit" class="button" name="hlz_action" value="update_preview">Update preview</button>';
+		echo '<label for="hlz-test-email">Test</label> ';
+		echo '<input id="hlz-test-email" name="hlz_test_email" type="email" class="regular-text" value="' . esc_attr( (string) $me->user_email ) . '"> ';
+		echo '<button type="submit" class="button" name="hlz_action" value="send_test">Send test</button>';
+		echo '</p>';
+		echo '<p class="hlz-actions">';
+		echo '<button type="submit" class="button button-primary" name="hlz_action" value="send">Send</button> ';
+		echo '<button type="submit" class="button" name="hlz_action" value="resend_failures">Resend failures</button>';
+		echo '</p>';
+		echo '<p class="hlz-muted" style="margin:6px 0 0">Test does not email the class. Send skips anyone already emailed. Resend failures retries only failed addresses.</p>';
+		echo '</form>';
+	}
+
+	private static function render_attendees_panel( array $event ): void {
+		$eve_id   = (int) $event['eve_id'];
 		$people   = HLZ_Recipients::for_event( $event );
 		$sends    = HLZ_Shares::sends_for_event( $eve_id );
 		$by_email = array();
@@ -677,68 +745,28 @@ class HLZ_Admin {
 			$by_email[ strtolower( (string) $send->email ) ] = $send;
 		}
 
-		echo '<div class="hlz-card"><h2>Attendees</h2>';
+		echo '<div class="hlz-card">';
+		echo '<h2>Contacts</h2>';
 		if ( is_wp_error( $people ) ) {
 			echo '<div class="notice notice-error"><p>' . esc_html( $people->get_error_message() ) . '</p></div>';
 		} else {
-			echo '<p>' . count( $people ) . ' active registrant' . ( count( $people ) === 1 ? '' : 's' ) . '. Canceled orders and canceled registrations are excluded. Each person is emailed separately.</p>';
-			echo '<table class="widefat striped"><thead><tr><th>Name</th><th>Email</th><th>Status</th><th>Send</th></tr></thead><tbody>';
+			echo '<p class="hlz-muted" style="margin-top:0">' . (int) count( $people ) . ' active registrant' . ( count( $people ) === 1 ? '' : 's' ) . '. Canceled excluded.</p>';
+			echo '<div class="hlz-attendees-scroll">';
+			echo '<table class="widefat striped"><thead><tr><th>Name</th><th>Email</th><th>Send</th></tr></thead><tbody>';
 			if ( empty( $people ) ) {
-				echo '<tr><td colspan="4">No one to email.</td></tr>';
+				echo '<tr><td colspan="3">No one to email.</td></tr>';
 			}
 			foreach ( $people as $person ) {
 				$prior = $by_email[ strtolower( $person['email'] ) ] ?? null;
 				echo '<tr>';
 				echo '<td>' . esc_html( $person['name'] !== '' ? $person['name'] : '—' ) . '</td>';
 				echo '<td>' . esc_html( $person['email'] ) . '</td>';
-				echo '<td>' . esc_html( $person['status'] ) . '</td>';
 				echo '<td>' . esc_html( self::send_state_label( $prior ) ) . '</td>';
 				echo '</tr>';
 			}
-			echo '</tbody></table>';
+			echo '</tbody></table></div>';
 		}
 		echo '</div>';
-
-		$note = HLZ_Mailer::remembered_note( $eve_id );
-		echo '<div class="hlz-card"><h2>Email</h2>';
-		if ( ! $template ) {
-			echo '<p>No template matches this class title. Choose one above, or add the class phrase to the Cvent title.</p>';
-		} else {
-			echo '<p><strong>From:</strong> ' . esc_html( HLZ_Settings::get()['from_name'] . ' <' . HLZ_Settings::get()['from_email'] . '>' ) . '</p>';
-			echo '<p><strong>Subject:</strong> ' . esc_html( HLZ_Mailer::render_subject( $template, $event ) ) . '</p>';
-			$preview = HLZ_Mailer::render( $template, $event, $rows, $note );
-			$me      = wp_get_current_user();
-			echo '<form method="post">';
-			wp_nonce_field( 'hlz_send' );
-			echo '<input type="hidden" name="eve_id" value="' . esc_attr( (string) $eve_id ) . '">';
-			echo '<p><label for="hlz-note"><strong>Special message</strong></label><br>';
-			echo '<textarea id="hlz-note" name="hlz_note" class="hlz-note">' . esc_textarea( $note ) . '</textarea></p>';
-			echo '<p><strong>Preview</strong></p>';
-			echo '<div class="hlz-mail-preview">' . wp_kses_post( $preview ) . '</div>';
-			echo '<p class="hlz-actions" style="margin-top:12px">';
-			echo '<button type="submit" class="button" name="hlz_action" value="update_preview">Update preview</button>';
-			echo '</p>';
-			echo '<p class="hlz-actions">';
-			echo '<label for="hlz-test-email">Test address</label> ';
-			echo '<input id="hlz-test-email" name="hlz_test_email" type="email" class="regular-text" value="' . esc_attr( (string) $me->user_email ) . '"> ';
-			echo '<button type="submit" class="button" name="hlz_action" value="send_test">Send test</button>';
-			echo '</p>';
-			echo '<p class="hlz-muted">The test goes only to that address. It does not email the class and does not start the 30-day clock.</p>';
-			echo '<p class="hlz-actions">';
-			echo '<button type="submit" class="button button-primary" name="hlz_action" value="send">Send</button> ';
-			echo '<button type="submit" class="button" name="hlz_action" value="resend_failures">Resend failures</button>';
-			echo '</p>';
-			echo '<p class="hlz-muted">Send skips anyone already emailed, including earlier failures. Resend failures tries only the addresses that did not go out.</p>';
-			echo '</form>';
-			echo '<form method="post" style="margin-top:8px">';
-			wp_nonce_field( 'hlz_prepare' );
-			echo '<input type="hidden" name="hlz_action" value="prepare">';
-			echo '<input type="hidden" name="eve_id" value="' . esc_attr( (string) $eve_id ) . '">';
-			submit_button( 'Prepare share links again', 'secondary', 'submit', false );
-			echo '</form>';
-		}
-		echo '</div>';
-		self::page_close();
 	}
 
 	/**
@@ -747,15 +775,15 @@ class HLZ_Admin {
 	 */
 	private static function render_match_form( array $event, array $rows, array $choices ): void {
 		$eve_id = (int) $event['eve_id'];
-		echo '<div class="hlz-card"><h2>Recordings</h2>';
+		echo '<div class="hlz-card hlz-recordings-card"><h2>Recordings</h2>';
 		echo '<form method="post">';
 		wp_nonce_field( 'hlz_save_match' );
 		echo '<input type="hidden" name="hlz_action" value="save_match">';
 		echo '<input type="hidden" name="eve_id" value="' . esc_attr( (string) $eve_id ) . '">';
-		echo '<table class="widefat"><thead><tr><th>Day</th><th>Recording</th><th>Link</th></tr></thead><tbody>';
+		echo '<table class="widefat striped"><thead><tr><th style="width:180px">Day</th><th>Recording</th><th style="width:110px">Status</th></tr></thead><tbody>';
 		foreach ( HLZ_Bridge::slots( $event ) as $slot ) {
-			$day = (int) $slot['day_index'];
-			$row = $rows[ $day ] ?? null;
+			$day    = (int) $slot['day_index'];
+			$row    = $rows[ $day ] ?? null;
 			$locked = $row && (string) $row->status !== '';
 			echo '<tr><td>';
 			if ( $slot['date'] !== '' ) {
@@ -764,12 +792,12 @@ class HLZ_Admin {
 				echo esc_html( 'Day ' . $day );
 			}
 			if ( ! $slot['auto'] ) {
-				echo '<br><span class="hlz-muted">Manual — this class is not 1 or 2 days.</span>';
+				echo '<br><span class="hlz-muted">Manual</span>';
 			}
 			echo '</td><td>';
 			if ( $locked ) {
 				echo esc_html( (string) $row->topic !== '' ? $row->topic : (string) $row->meeting_id );
-				echo '<br><span class="hlz-muted">Turn the share off before choosing a different recording.</span>';
+				echo ' <span class="hlz-muted">Turn the share off to change.</span>';
 			} else {
 				$selected = '';
 				if ( $row ) {
@@ -799,29 +827,22 @@ class HLZ_Admin {
 				echo '</select>';
 			}
 			echo '</td><td>';
-			if ( $row && trim( (string) $row->share_url ) !== '' ) {
-				echo '<span class="hlz-status hlz-status-' . esc_attr( (string) $row->status ) . '">' . esc_html( self::status_label( (string) $row->status ) ) . '</span><br>';
-				echo '<a href="' . esc_url( (string) $row->share_url ) . '">' . esc_html( (string) $row->share_url ) . '</a>';
-				echo '<br>Passcode: ' . esc_html( (string) $row->passcode );
-				if ( in_array( (string) ( $row->share_origin ?? '' ), array( 'existing', 'existing_internal' ), true ) ) {
-					echo '<br><span class="hlz-muted">Existing Zoom share kept.</span>';
-				}
-				if ( (string) $row->expires_at !== '' ) {
-					echo '<br>Expires ' . esc_html( (string) $row->expires_at );
-				}
-				if ( (string) $row->last_error !== '' ) {
-					echo '<br><span class="hlz-muted">' . esc_html( (string) $row->last_error ) . '</span>';
-				}
+			if ( $row && (string) $row->status !== '' ) {
+				echo '<span class="hlz-status hlz-status-' . esc_attr( (string) $row->status ) . '">' . esc_html( self::status_label( (string) $row->status ) ) . '</span>';
+			} elseif ( $row && trim( (string) $row->meeting_id ) !== '' ) {
+				echo '<span class="hlz-muted">Matched</span>';
 			} else {
-				echo '<span class="hlz-muted">Not prepared</span>';
-				if ( $row && (string) $row->last_error !== '' ) {
-					echo '<br>' . esc_html( (string) $row->last_error );
-				}
+				echo '<span class="hlz-muted">—</span>';
+			}
+			if ( $row && (string) $row->last_error !== '' ) {
+				echo '<br><span class="hlz-muted">' . esc_html( (string) $row->last_error ) . '</span>';
 			}
 			echo '</td></tr>';
 		}
 		echo '</tbody></table>';
-		submit_button( 'Save recording choice' );
+		echo '<p class="hlz-actions" style="margin:10px 0 0">';
+		submit_button( 'Save recording choice', 'secondary', 'submit', false );
+		echo '</p>';
 		echo '</form>';
 		self::render_passcode_forms( $rows );
 		echo '</div>';
@@ -893,7 +914,13 @@ class HLZ_Admin {
 	 * @param array<int,object> $rows
 	 */
 	private static function render_link_summary( array $event, array $rows ): void {
-		echo '<div class="hlz-card"><h2>Share links for this class</h2>';
+		echo '<div class="hlz-card"><h2>Share links</h2>';
+		echo '<form method="post" class="hlz-actions" style="margin:0 0 10px">';
+		wp_nonce_field( 'hlz_prepare' );
+		echo '<input type="hidden" name="hlz_action" value="prepare">';
+		echo '<input type="hidden" name="eve_id" value="' . esc_attr( (string) (int) $event['eve_id'] ) . '">';
+		submit_button( 'Prepare share links again', 'secondary', 'submit', false );
+		echo '</form>';
 		self::render_shared_table( array_values( $rows ), array( (int) $event['eve_id'] => $event ), (int) $event['eve_id'] );
 		echo '</div>';
 	}
@@ -960,19 +987,19 @@ class HLZ_Admin {
 		$map      = get_option( 'hlz_template_overrides', array() );
 		$override = ( is_array( $map ) && ! empty( $map[ $eve_id ] ) ) ? (string) $map[ $eve_id ] : '';
 		$detected = HLZ_Templates::detect( HLZ_Bridge::event_title( $event ) );
-		echo '<div class="hlz-card"><h2>Template</h2>';
-		echo '<form method="post" class="hlz-actions">';
+		echo '<form method="post" class="hlz-actions" style="margin:0 0 12px">';
 		wp_nonce_field( 'hlz_save_template_choice' );
 		echo '<input type="hidden" name="hlz_action" value="save_template_choice">';
 		echo '<input type="hidden" name="eve_id" value="' . esc_attr( (string) $eve_id ) . '">';
-		echo '<select name="template_slug">';
+		echo '<label for="hlz-template-slug"><strong>Template</strong></label> ';
+		echo '<select id="hlz-template-slug" name="template_slug">';
 		echo '<option value="" ' . selected( $override, '', false ) . '>Automatic (' . esc_html( $detected !== '' ? $detected : 'no title match' ) . ')</option>';
 		foreach ( HLZ_Templates::all() as $template ) {
 			echo '<option value="' . esc_attr( $template->slug ) . '" ' . selected( $override, (string) $template->slug, false ) . '>' . esc_html( $template->label ) . '</option>';
 		}
 		echo '</select>';
 		submit_button( 'Use this template', 'secondary', 'submit', false );
-		echo '</form></div>';
+		echo '</form>';
 	}
 
 	/**
