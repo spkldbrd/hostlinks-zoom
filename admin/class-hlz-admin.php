@@ -64,10 +64,16 @@ class HLZ_Admin {
 			.hlz-actions form{margin:0}
 			.hlz-preview-grid{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(280px,.85fr);gap:16px;align-items:start;margin:16px 0}
 			.hlz-preview-grid>.hlz-card{margin:0}
-			.hlz-title-card{padding:12px 16px}
-			.hlz-title-card h2{margin:0 0 4px}
-			.hlz-title-card p{margin:0}
-			.hlz-title-card .hlz-muted{margin-top:6px}
+			.hlz-title-card{padding:12px 16px;display:flex;justify-content:space-between;gap:20px;align-items:flex-start;flex-wrap:wrap}
+			.hlz-title-main{flex:1;min-width:240px}
+			.hlz-title-main h2{margin:0 0 4px}
+			.hlz-title-main p{margin:0}
+			.hlz-title-main .hlz-muted{margin-top:6px}
+			.hlz-title-share{flex:0 1 340px;text-align:right;font-size:13px;line-height:1.4}
+			.hlz-title-share p{margin:0 0 6px}
+			.hlz-title-share p:last-child{margin-bottom:0}
+			.hlz-title-share .hlz-share-ok{color:#0a6b2d}
+			.hlz-title-share .hlz-share-warn{color:#8a5a00}
 			.hlz-preview{width:100%;max-width:760px;min-height:420px;font-family:Consolas,monospace}
 			.hlz-note{width:100%;min-height:56px}
 			.hlz-mail-preview{max-width:100%;background:#fff;border:1px solid #c3c4c7;padding:14px 16px;font-family:Calibri,Arial,sans-serif;font-size:15px;line-height:1.4;color:#222}
@@ -665,12 +671,11 @@ class HLZ_Admin {
 			$rows = HLZ_Shares::for_event( $eve_id );
 		}
 
-		self::render_existing_share_notice( $rows );
-
 		$choices = HLZ_Matcher::dropdown_meetings( $event, $meetings );
 
 		$title = HLZ_Bridge::event_title( $event );
 		$dates = HLZ_Bridge::format_date_range( (string) $event['eve_start'], (string) $event['eve_end'] );
+		$share = self::existing_share_flags( $rows );
 		$past  = add_query_arg(
 			array(
 				'page' => 'hostlinks-zoom',
@@ -680,9 +685,24 @@ class HLZ_Admin {
 		);
 		echo '<p><a href="' . esc_url( $past ) . '">&larr; Past classes</a></p>';
 		echo '<div class="hlz-card hlz-title-card">';
+		echo '<div class="hlz-title-main">';
 		echo '<h2>' . esc_html( $title ) . '</h2>';
 		echo '<p>' . esc_html( $dates ) . ' · ' . esc_html( self::recording_count_label( $event ) ) . '</p>';
 		echo '<p class="hlz-muted">Anyone with the link can watch (passcode required). Downloads off. The 30 days start when you press Send.</p>';
+		echo '</div>';
+		if ( $share['kept'] || $share['internal'] || $share['needs'] ) {
+			echo '<div class="hlz-title-share">';
+			if ( $share['kept'] ) {
+				echo '<p class="hlz-share-ok"><strong>Zoom already shared this recording.</strong><br>The existing link and passcode were left unchanged.</p>';
+			}
+			if ( $share['internal'] ) {
+				echo '<p class="hlz-share-warn">Share is limited to people in your Zoom account. Outside attendees may not get in.</p>';
+			}
+			if ( $share['needs'] ) {
+				echo '<p class="hlz-share-warn">Passcode could not be read. Enter it below, or create a new one (that replaces the Zoom passcode).</p>';
+			}
+			echo '</div>';
+		}
 		echo '</div>';
 
 		echo '<div class="hlz-preview-grid">';
@@ -850,8 +870,9 @@ class HLZ_Admin {
 
 	/**
 	 * @param array<int,object> $rows
+	 * @return array{kept:bool,internal:bool,needs:bool}
 	 */
-	private static function render_existing_share_notice( array $rows ): void {
+	private static function existing_share_flags( array $rows ): array {
 		$kept     = false;
 		$internal = false;
 		$needs    = false;
@@ -867,15 +888,11 @@ class HLZ_Admin {
 				$needs = true;
 			}
 		}
-		if ( $kept ) {
-			echo '<div class="notice notice-info"><p>Zoom already shared this recording with a passcode. That link and passcode were left unchanged.</p></div>';
-		}
-		if ( $internal ) {
-			echo '<div class="notice notice-warning"><p>Zoom has this share limited to people in your Zoom account. Attendees outside the account may not be able to open it.</p></div>';
-		}
-		if ( $needs ) {
-			echo '<div class="notice notice-warning"><p>Zoom already shared this recording, but the passcode could not be read. Enter the current passcode, or create a new one. A new passcode replaces the one already in Zoom.</p></div>';
-		}
+		return array(
+			'kept'     => $kept,
+			'internal' => $internal,
+			'needs'    => $needs,
+		);
 	}
 
 	/**
