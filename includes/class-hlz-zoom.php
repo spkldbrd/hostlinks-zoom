@@ -225,18 +225,40 @@ class HLZ_Zoom {
 	/**
 	 * Public link, passcode, no download, no registration.
 	 *
+	 * Zoom sometimes ignores viewer_download when it is sent with the first
+	 * share PATCH, so downloads are turned off again on a follow-up call.
+	 *
 	 * @return true|WP_Error
 	 */
 	public static function publish_share( string $meeting_id, string $passcode ) {
+		$published = self::update_recording_settings(
+			$meeting_id,
+			array(
+				'share_recording'          => 'publicly',
+				'password'                 => $passcode,
+				'viewer_download'          => false,
+				'on_demand'                => false,
+				'approval_type'            => 2,
+				'recording_authentication' => false,
+			)
+		);
+		if ( is_wp_error( $published ) ) {
+			return $published;
+		}
+		self::disable_viewer_download( $meeting_id );
+		return true;
+	}
+
+	/**
+	 * Turn off “Viewers can download” without changing the passcode or share mode.
+	 *
+	 * @return true|WP_Error
+	 */
+	public static function disable_viewer_download( string $meeting_id ) {
 		return self::update_recording_settings(
 			$meeting_id,
 			array(
-				'share_recording'         => 'publicly',
-				'password'                => $passcode,
-				'viewer_download'         => false,
-				'on_demand'               => false,
-				'approval_type'           => 2,
-				'recording_authentication'=> false,
+				'viewer_download' => false,
 			)
 		);
 	}

@@ -623,7 +623,7 @@ class HLZ_Admin {
 		echo '<li><code>cloud_recording:read:list_recording_files:admin</code></li>';
 		echo '<li><code>cloud_recording:read:recording_settings:admin</code></li>';
 		echo '<li><code>cloud_recording:update:recording_settings:admin</code></li></ul>';
-		echo '<p>The Zoom role also needs permission to view recording content. That permission lets the plugin read an existing passcode instead of replacing it. Viewers can see the chat is an account setting for newly generated recordings. Zoom’s per-recording API cannot turn that on.</p>';
+		echo '<p>The Zoom role also needs permission to view recording content. That permission lets the plugin read an existing passcode instead of replacing it. Viewers can see the chat is an account setting for newly generated recordings. Zoom’s per-recording API cannot turn that on. The “Set expiration date” checkbox also has no API; Hostlinks unpublishes the share 30 days after Send.</p>';
 		echo '<form method="post">';
 		wp_nonce_field( 'hlz_save_settings' );
 		echo '<input type="hidden" name="hlz_form" value="settings">';
@@ -690,7 +690,7 @@ class HLZ_Admin {
 		echo '<div class="hlz-title-main">';
 		echo '<h2>' . esc_html( $title ) . '</h2>';
 		echo '<p>' . esc_html( $dates ) . ' · ' . esc_html( self::recording_count_label( $event ) ) . '</p>';
-		echo '<p class="hlz-muted">Anyone with the link can watch (passcode required). Downloads off. The 30 days start when you press Send.</p>';
+		echo '<p class="hlz-muted">Anyone with the link can watch (passcode required). We turn downloads off in Zoom. Zoom has no API for its expiration checkbox; we unpublish the share 30 days after Send.</p>';
 		echo '</div>';
 		if ( $share['kept'] || $share['internal'] || $share['needs'] ) {
 			echo '<div class="hlz-title-share">';

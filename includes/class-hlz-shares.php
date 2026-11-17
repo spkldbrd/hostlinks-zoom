@@ -444,7 +444,11 @@ class HLZ_Shares {
 	 * @param array{url:string,passcode:string,mode:string,shared:bool} $existing
 	 */
 	private static function store_existing_share( object $row, array $existing ): void {
-		$origin = $existing['mode'] === 'internally' ? 'existing_internal' : 'existing';
+		$origin     = $existing['mode'] === 'internally' ? 'existing_internal' : 'existing';
+		$meeting_id = self::api_meeting_id( $row );
+		if ( $meeting_id !== '' ) {
+			HLZ_Zoom::disable_viewer_download( $meeting_id );
+		}
 		self::touch(
 			(int) $row->id,
 			array(
@@ -574,6 +578,10 @@ class HLZ_Shares {
 			}
 			if ( (string) $row->status === 'off' ) {
 				continue;
+			}
+			$meeting_id = self::api_meeting_id( $row );
+			if ( $meeting_id !== '' ) {
+				HLZ_Zoom::disable_viewer_download( $meeting_id );
 			}
 			$fields = array(
 				'status' => 'shared',
