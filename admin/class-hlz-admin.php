@@ -76,6 +76,8 @@ class HLZ_Admin {
 			.hlz-status-matched{background:#d5f5e3}
 			.hlz-status-partial{background:#fff3cd}
 			.hlz-status-unmatched{background:#f8d7da}
+			.hlz-wrap .hlz-tablenav{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin:12px 0 0}
+			.hlz-wrap .hlz-tablenav .pagination-links{display:flex;gap:4px;flex-wrap:wrap}
 		</style>';
 	}
 
@@ -177,7 +179,7 @@ class HLZ_Admin {
 		$events = HLZ_Bridge::past_zoom_events( $since );
 		$result = HLZ_Matcher::sync_events( $events );
 		if ( is_wp_error( $result ) ) {
-			self::redirect_list( $days, $result->get_error_message(), true );
+			self::redirect_list( $days, $result->get_error_message(), true, 'past' );
 		}
 		$message = sprintf(
 			'Matched %1$d, partial %2$d, still unmatched %3$d.',
@@ -185,7 +187,7 @@ class HLZ_Admin {
 			(int) $result['partial'],
 			(int) $result['unmatched']
 		);
-		self::redirect_list( $days, $message );
+		self::redirect_list( $days, $message, false, 'past' );
 	}
 
 	private static function post_save_match(): void {
@@ -361,7 +363,7 @@ class HLZ_Admin {
 		if ( $eve_id > 0 && isset( $_POST['hlz_return'] ) && sanitize_key( wp_unslash( $_POST['hlz_return'] ) ) === 'preview' ) {
 			self::redirect_preview( $eve_id, $text, ! $ok );
 		}
-		self::redirect_list( self::days_from_request(), $text, ! $ok );
+		self::redirect_list( self::days_from_request(), $text, ! $ok, self::tab_from_request() );
 	}
 
 	private static function post_template_choice(): void {
@@ -385,19 +387,8 @@ class HLZ_Admin {
 			return;
 		}
 
-		$days   = self::days_from_request();
-		$since  = HLZ_Bridge::shift_date( wp_date( 'Y-m-d' ), -1 * $days );
-		$events = HLZ_Bridge::past_zoom_events( $since );
-		$ids    = array_map( static function ( $event ) {
-			return (int) $event['eve_id'];
-		}, $events );
-		$stored = HLZ_Shares::for_events( $ids );
-		$shared = HLZ_Shares::manageable();
-		$shared_events = HLZ_Bridge::get_events_by_ids(
-			array_map( static function ( $row ) {
-				return (int) $row->eve_id;
-			}, $shared )
-		);
+		$tab  = self::tab_from_request();
+		$days = self::days_from_request();
 
 		self::page_open( 'Hostlinks Zoom' );
 		self::render_flash();
@@ -405,16 +396,82 @@ class HLZ_Admin {
 			echo '<div class="notice notice-warning"><p>Add the Zoom app credentials under <a href="' . esc_url( admin_url( 'admin.php?page=hostlinks-zoom-settings' ) ) . '">Settings</a> before matching recordings.</p></div>';
 		}
 
+		self::render_recordings_tabs( $tab, $days );
+
+		if ( $tab === 'shared' ) {
+			self::render_shared_tab();
+		} else {
+			self::render_past_tab( $days );
+		}
+
+		self::page_close();
+	}
+
+	private static function render_recordings_tabs( string $tab, int $days ): void {
+		$base = admin_url( 'admin.php' );
+		$shared_url = add_query_arg(
+			array(
+				'page' => 'hostlinks-zoom',
+				'tab'  => 'shared',
+			),
+			$base
+		);
+		$past_url = add_query_arg(
+			array(
+				'page' => 'hostlinks-zoom',
+				'tab'  => 'past',
+				'days' => $days,
+			),
+			$base
+		);
+		echo '<nav class="nav-tab-wrapper" style="margin:12px 0 8px;">';
+		echo '<a href="' . esc_url( $shared_url ) . '" class="nav-tab' . ( $tab === 'shared' ? ' nav-tab-active' : '' ) . '">Currently shared</a>';
+		echo '<a href="' . esc_url( $past_url ) . '" class="nav-tab' . ( $tab === 'past' ? ' nav-tab-active' : '' ) . '">Past classes</a>';
+		echo '</nav>';
+	}
+
+	private static function render_shared_tab(): void {
+		$shared = HLZ_Shares::manageable();
+		$total  = count( $shared );
+		$page   = self::list_page_from_request();
+		$slice  = self::page_slice( $shared, $page, $total );
+
+		$shared_events = HLZ_Bridge::get_events_by_ids(
+			array_map(
+				static function ( $row ) {
+					return (int) $row->eve_id;
+				},
+				$slice['rows']
+			)
+		);
+
 		echo '<div class="hlz-card">';
 		echo '<h2>Currently shared</h2>';
-		echo '<p class="hlz-muted">Public links that were prepared or sent, plus links turned off in the last 120 days. Extend keeps the same passcode and sets a new 30 days from today.</p>';
-		self::render_shared_table( $shared, $shared_events, 0 );
+		echo '<p class="hlz-muted">Public links that were prepared or sent, plus links turned off in the last 120 days. Newest first. Extend keeps the same passcode and sets a new 30 days from today.</p>';
+		self::render_shared_table( $slice['rows'], $shared_events, 0 );
+		self::render_list_pagination( $total, $page, array( 'tab' => 'shared' ) );
 		echo '</div>';
+	}
+
+	private static function render_past_tab( int $days ): void {
+		$since  = HLZ_Bridge::shift_date( wp_date( 'Y-m-d' ), -1 * $days );
+		$events = HLZ_Bridge::past_zoom_events( $since );
+		$total  = count( $events );
+		$page   = self::list_page_from_request();
+		$slice  = self::page_slice( $events, $page, $total );
+		$ids    = array_map(
+			static function ( $event ) {
+				return (int) $event['eve_id'];
+			},
+			$slice['rows']
+		);
+		$stored = HLZ_Shares::for_events( $ids );
 
 		echo '<div class="hlz-card">';
 		echo '<h2>Past Zoom classes</h2>';
 		echo '<form method="get" class="hlz-actions" style="margin-bottom:12px">';
 		echo '<input type="hidden" name="page" value="hostlinks-zoom">';
+		echo '<input type="hidden" name="tab" value="past">';
 		echo '<label for="hlz-days">Ended within</label> ';
 		echo '<select id="hlz-days" name="days">';
 		foreach ( array( 30, 90, 120, 180, 365 ) as $option ) {
@@ -428,17 +485,18 @@ class HLZ_Admin {
 		wp_nonce_field( 'hlz_match_all' );
 		echo '<input type="hidden" name="hlz_action" value="match_all">';
 		echo '<input type="hidden" name="days" value="' . esc_attr( (string) $days ) . '">';
+		echo '<input type="hidden" name="tab" value="past">';
 		submit_button( 'Match recordings', 'primary', 'submit', false );
-		echo '<span class="hlz-muted">Matches by class date and title (Grant Writing, Grant Management, Subaward, Deep Dive Session 1–3).</span>';
+		echo '<span class="hlz-muted">Matches by class date and title (Grant Writing, Grant Management, Subaward, Deep Dive Session 1–3). Match uses every class in this window, not just this page.</span>';
 		echo '</form>';
 
 		echo '<table class="widefat striped"><thead><tr>';
 		echo '<th>Class</th><th>Dates</th><th>Recordings</th><th>Match</th><th>Share</th><th></th>';
 		echo '</tr></thead><tbody>';
-		if ( empty( $events ) ) {
+		if ( empty( $slice['rows'] ) ) {
 			echo '<tr><td colspan="6">No past Zoom classes with a Cvent link in this window.</td></tr>';
 		}
-		foreach ( $events as $event ) {
+		foreach ( $slice['rows'] as $event ) {
 			$eve_id = (int) $event['eve_id'];
 			$rows   = $stored[ $eve_id ] ?? array();
 			$state  = HLZ_Matcher::match_state( $event, $rows );
@@ -458,8 +516,16 @@ class HLZ_Admin {
 			echo '<td><a class="button" href="' . esc_url( $preview ) . '">Preview</a></td>';
 			echo '</tr>';
 		}
-		echo '</tbody></table></div>';
-		self::page_close();
+		echo '</tbody></table>';
+		self::render_list_pagination(
+			$total,
+			$page,
+			array(
+				'tab'  => 'past',
+				'days' => $days,
+			)
+		);
+		echo '</div>';
 	}
 
 	public static function render_templates(): void {
@@ -864,6 +930,7 @@ class HLZ_Admin {
 				echo '<input type="hidden" name="hlz_return" value="preview">';
 			}
 			echo '<input type="hidden" name="days" value="' . esc_attr( (string) self::days_from_request() ) . '">';
+			echo '<input type="hidden" name="tab" value="' . esc_attr( self::tab_from_request() ) . '">';
 			submit_button( 'Extend', 'secondary', 'submit', false );
 			echo '</form>';
 			if ( (string) $row->status !== 'off' ) {
@@ -876,6 +943,7 @@ class HLZ_Admin {
 					echo '<input type="hidden" name="hlz_return" value="preview">';
 				}
 				echo '<input type="hidden" name="days" value="' . esc_attr( (string) self::days_from_request() ) . '">';
+				echo '<input type="hidden" name="tab" value="' . esc_attr( self::tab_from_request() ) . '">';
 				submit_button( 'Turn off', 'secondary', 'submit', false );
 				echo '</form>';
 			}
@@ -1089,11 +1157,78 @@ class HLZ_Admin {
 	}
 
 	private static function days_from_request(): int {
-		$days = absint( $_REQUEST['days'] ?? 120 );
+		$days = absint( $_REQUEST['days'] ?? 30 );
 		if ( ! in_array( $days, array( 30, 90, 120, 180, 365 ), true ) ) {
-			return 120;
+			return 30;
 		}
 		return $days;
+	}
+
+	/**
+	 * @return 'shared'|'past'
+	 */
+	private static function tab_from_request(): string {
+		$tab = isset( $_REQUEST['tab'] ) ? sanitize_key( wp_unslash( $_REQUEST['tab'] ) ) : 'past';
+		return $tab === 'shared' ? 'shared' : 'past';
+	}
+
+	private static function list_per_page(): int {
+		return 25;
+	}
+
+	private static function list_page_from_request(): int {
+		return max( 1, absint( $_GET['paged'] ?? 1 ) );
+	}
+
+	/**
+	 * @param array<int,mixed> $items
+	 * @return array{rows:array<int,mixed>,page:int}
+	 */
+	private static function page_slice( array $items, int $page, int $total ): array {
+		$per  = self::list_per_page();
+		$max  = max( 1, (int) ceil( max( 0, $total ) / $per ) );
+		$page = min( $page, $max );
+		$off  = ( $page - 1 ) * $per;
+		return array(
+			'rows' => array_slice( $items, $off, $per ),
+			'page' => $page,
+		);
+	}
+
+	/**
+	 * @param array<string,scalar> $query
+	 */
+	private static function render_list_pagination( int $total, int $current, array $query ): void {
+		$per = self::list_per_page();
+		echo '<div class="hlz-tablenav">';
+		echo '<span class="hlz-muted">Showing ' . esc_html( (string) $total ) . ' ' . esc_html( $total === 1 ? 'item' : 'items' ) . '.</span>';
+		if ( $total > $per ) {
+			$pages = (int) ceil( $total / $per );
+			$base  = add_query_arg(
+				array_merge(
+					array(
+						'page' => 'hostlinks-zoom',
+					),
+					$query
+				),
+				admin_url( 'admin.php' )
+			);
+			$links = paginate_links(
+				array(
+					'base'      => add_query_arg( 'paged', '%#%', $base ),
+					'format'    => '',
+					'total'     => $pages,
+					'current'   => min( $current, $pages ),
+					'type'      => 'plain',
+					'prev_text' => '&laquo;',
+					'next_text' => '&raquo;',
+				)
+			);
+			if ( is_string( $links ) && $links !== '' ) {
+				echo '<span class="pagination-links">' . wp_kses_post( $links ) . '</span>';
+			}
+		}
+		echo '</div>';
 	}
 
 	public static function render_screen(): void {
@@ -1143,17 +1278,19 @@ class HLZ_Admin {
 		return 'hlz_flash_' . get_current_user_id();
 	}
 
-	private static function redirect_list( int $days, string $text, bool $error = false ): void {
+	private static function redirect_list( int $days, string $text, bool $error = false, string $tab = '' ): void {
 		self::flash( $text, $error );
-		wp_safe_redirect(
-			add_query_arg(
-				array(
-					'page' => 'hostlinks-zoom',
-					'days' => $days,
-				),
-				admin_url( 'admin.php' )
-			)
+		if ( $tab !== 'shared' && $tab !== 'past' ) {
+			$tab = self::tab_from_request();
+		}
+		$args = array(
+			'page' => 'hostlinks-zoom',
+			'tab'  => $tab,
 		);
+		if ( $tab === 'past' ) {
+			$args['days'] = $days;
+		}
+		wp_safe_redirect( add_query_arg( $args, admin_url( 'admin.php' ) ) );
 		exit;
 	}
 

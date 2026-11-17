@@ -78,8 +78,7 @@ class HLZ_Shares {
 				     OR sent_at >= %s
 				     OR expires_at >= %s
 				   )
-				 ORDER BY expires_at IS NULL, expires_at DESC, id DESC
-				 LIMIT 100",
+				 ORDER BY id DESC",
 				$cutoff,
 				$cutoff,
 				$cutoff
