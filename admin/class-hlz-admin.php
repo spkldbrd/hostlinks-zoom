@@ -96,6 +96,8 @@ class HLZ_Admin {
 			.hlz-status-unmatched{background:#f8d7da}
 			.hlz-wrap .hlz-tablenav{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin:12px 0 0}
 			.hlz-wrap .hlz-tablenav .pagination-links{display:flex;gap:4px;flex-wrap:wrap}
+			.hlz-wrap .button,.hlz-wrap input[type=submit]{border-radius:8px!important}
+			.hlz-wrap select,.hlz-wrap input[type=email],.hlz-wrap input[type=text],.hlz-wrap input[type=password],.hlz-wrap textarea{border-radius:8px}
 		</style>';
 	}
 
