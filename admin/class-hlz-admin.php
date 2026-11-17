@@ -730,7 +730,7 @@ class HLZ_Admin {
 
 		echo '<h2>Email preview</h2>';
 		if ( ! $template ) {
-			echo '<p>No template matches this class title. Choose one above, or add the class phrase to the Cvent title.</p>';
+			echo '<p>No template matches this class or Zoom recording title. Choose one above.</p>';
 			return;
 		}
 
@@ -1005,14 +1005,14 @@ class HLZ_Admin {
 		$eve_id   = (int) $event['eve_id'];
 		$map      = get_option( 'hlz_template_overrides', array() );
 		$override = ( is_array( $map ) && ! empty( $map[ $eve_id ] ) ) ? (string) $map[ $eve_id ] : '';
-		$detected = HLZ_Templates::detect( HLZ_Bridge::event_title( $event ) );
+		$detected = HLZ_Templates::detect_for_event( $event );
 		echo '<form method="post" class="hlz-actions" style="margin:0 0 12px">';
 		wp_nonce_field( 'hlz_save_template_choice' );
 		echo '<input type="hidden" name="hlz_action" value="save_template_choice">';
 		echo '<input type="hidden" name="eve_id" value="' . esc_attr( (string) $eve_id ) . '">';
 		echo '<label for="hlz-template-slug"><strong>Template</strong></label> ';
 		echo '<select id="hlz-template-slug" name="template_slug">';
-		echo '<option value="" ' . selected( $override, '', false ) . '>Automatic (' . esc_html( $detected !== '' ? $detected : 'no title match' ) . ')</option>';
+		echo '<option value="" ' . selected( $override, '', false ) . '>Automatic (' . esc_html( HLZ_Templates::label_for( $detected ) ) . ')</option>';
 		foreach ( HLZ_Templates::all() as $template ) {
 			echo '<option value="' . esc_attr( $template->slug ) . '" ' . selected( $override, (string) $template->slug, false ) . '>' . esc_html( $template->label ) . '</option>';
 		}

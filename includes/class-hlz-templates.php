@@ -10,9 +10,10 @@ if ( ! defined( 'ABSPATH' ) ) {
 class HLZ_Templates {
 
 	/**
-	 * Most specific phrases first. "Subaward" matches "Subawards".
+	 * Most specific phrases first. "Grant Writing" is last because Cvent titles
+	 * often start with the company name "Grant Writing USA".
 	 *
-	 * @return array<int,array{slug:string,label:string,phrase:string,subject:string,thanks:string,materials:string}>
+	 * @return array<int,array{slug:string,label:string,phrase:string,subject:string,thanks:string,materials:string,unless?:array<int,string>}>
 	 */
 	public static function definitions(): array {
 		return array(
@@ -41,14 +42,6 @@ class HLZ_Templates {
 				'materials' => 'including the current class materials and other workshop resources.',
 			),
 			array(
-				'slug'      => 'grant-writing',
-				'label'     => 'Grant Writing',
-				'phrase'    => 'Grant Writing',
-				'subject'   => 'Grant Writing Class Replay',
-				'thanks'    => 'the Grant Writing USA Live Zoom Class',
-				'materials' => 'including the current Grant Writing Workbook and other workshop resources.',
-			),
-			array(
 				'slug'      => 'grant-management',
 				'label'     => 'Grant Management',
 				'phrase'    => 'Grant Management',
@@ -64,7 +57,26 @@ class HLZ_Templates {
 				'thanks'    => 'the Managing Subawards Training',
 				'materials' => 'including the current class materials and other workshop resources.',
 			),
+			array(
+				'slug'      => 'grant-writing',
+				'label'     => 'Grant Writing',
+				'phrase'    => 'Grant Writing',
+				'subject'   => 'Grant Writing Class Replay',
+				'thanks'    => 'the Grant Writing USA Live Zoom Class',
+				'materials' => 'including the current Grant Writing Workbook and other workshop resources.',
+				'unless'    => array( 'Deep Dive', 'Grant Management', 'Subaward' ),
+			),
 		);
+	}
+
+	/**
+	 * Hyphens and extra spaces do not change a match. "Deep-Dive" = "Deep Dive".
+	 */
+	public static function normalize( string $text ): string {
+		$text = strtolower( $text );
+		$text = str_replace( array( '–', '—', '-', '/', '_' ), ' ', $text );
+		$text = preg_replace( '/\s+/', ' ', $text );
+		return trim( (string) $text );
 	}
 
 	public static function seed_missing(): void {
@@ -170,15 +182,85 @@ class HLZ_Templates {
 	}
 
 	/**
-	 * Class-type slug for a Cvent title, or empty when nothing matches.
+	 * Class-type slug for a title, or empty when nothing matches.
 	 */
 	public static function detect( string $title ): string {
+		$haystack = self::normalize( $title );
+		if ( $haystack === '' ) {
+			return '';
+		}
 		foreach ( self::definitions() as $def ) {
-			if ( $def['phrase'] !== '' && stripos( $title, $def['phrase'] ) !== false ) {
-				return $def['slug'];
+			$phrase = self::normalize( (string) $def['phrase'] );
+			if ( $phrase === '' || strpos( $haystack, $phrase ) === false ) {
+				continue;
+			}
+			$blocked = false;
+			foreach ( (array) ( $def['unless'] ?? array() ) as $block ) {
+				$needle = self::normalize( (string) $block );
+				if ( $needle !== '' && strpos( $haystack, $needle ) !== false ) {
+					$blocked = true;
+					break;
+				}
+			}
+			if ( $blocked ) {
+				continue;
+			}
+			return $def['slug'];
+		}
+		return '';
+	}
+
+	/**
+	 * Prefer Zoom recording titles (session number) over the Cvent event title
+	 * (often "Grant Writing USA …").
+	 */
+	public static function detect_for_event( array $event ): string {
+		$parts = array();
+		$eve_id = (int) ( $event['eve_id'] ?? 0 );
+		if ( $eve_id > 0 && class_exists( 'HLZ_Shares', false ) ) {
+			foreach ( HLZ_Shares::for_event( $eve_id ) as $row ) {
+				$topic = trim( (string) ( $row->topic ?? '' ) );
+				if ( $topic !== '' ) {
+					$parts[] = $topic;
+				}
+			}
+		}
+		$parts[] = HLZ_Bridge::event_title( $event );
+		return self::detect( implode( "\n", $parts ) );
+	}
+
+	/**
+	 * Broader phrase used to find Zoom recordings when the Cvent title names
+	 * a series but not a session-specific template.
+	 */
+	public static function search_phrase_for_title( string $title ): string {
+		$slug = self::detect( $title );
+		if ( $slug !== '' ) {
+			return self::phrase_for( $slug );
+		}
+		$haystack = self::normalize( $title );
+		foreach ( array( 'Deep Dive', 'Grant Management', 'Subaward', 'Grant Writing' ) as $family ) {
+			if ( strpos( $haystack, self::normalize( $family ) ) !== false ) {
+				return $family;
 			}
 		}
 		return '';
+	}
+
+	public static function label_for( string $slug ): string {
+		if ( $slug === '' ) {
+			return 'no title match';
+		}
+		$row = self::get( $slug );
+		if ( $row && trim( (string) $row->label ) !== '' ) {
+			return (string) $row->label;
+		}
+		foreach ( self::definitions() as $def ) {
+			if ( $def['slug'] === $slug ) {
+				return $def['label'];
+			}
+		}
+		return $slug;
 	}
 
 	public static function phrase_for( string $slug ): string {

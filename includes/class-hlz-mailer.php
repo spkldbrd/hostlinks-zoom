@@ -33,7 +33,7 @@ class HLZ_Mailer {
 				return $row;
 			}
 		}
-		$slug = HLZ_Templates::detect( HLZ_Bridge::event_title( $event ) );
+		$slug = HLZ_Templates::detect_for_event( $event );
 		return $slug === '' ? null : HLZ_Templates::get( $slug );
 	}
 

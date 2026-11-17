@@ -246,8 +246,7 @@ class HLZ_Matcher {
 	}
 
 	public static function phrase_for_event( array $event ): string {
-		$slug = HLZ_Templates::detect( HLZ_Bridge::event_title( $event ) );
-		return $slug === '' ? '' : HLZ_Templates::phrase_for( $slug );
+		return HLZ_Templates::search_phrase_for_title( HLZ_Bridge::event_title( $event ) );
 	}
 
 	/**
@@ -258,7 +257,7 @@ class HLZ_Matcher {
 		$hits = array();
 		foreach ( $meetings as $meeting ) {
 			$topic = (string) ( $meeting['topic'] ?? '' );
-			if ( $phrase === '' || stripos( $topic, $phrase ) === false ) {
+			if ( $phrase === '' || strpos( HLZ_Templates::normalize( $topic ), HLZ_Templates::normalize( $phrase ) ) === false ) {
 				continue;
 			}
 			$local = HLZ_Bridge::zoom_local_date( (string) ( $meeting['start_time'] ?? '' ) );
