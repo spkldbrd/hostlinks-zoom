@@ -465,11 +465,12 @@ class HLZ_Shares {
 	/**
 	 * @return true|WP_Error
 	 */
-	public static function extend( int $id ) {
+	public static function extend( int $id, int $days ) {
 		$row = self::get( $id );
 		if ( ! $row ) {
 			return new WP_Error( 'hlz_share', 'Recording not found.' );
 		}
+		$days       = HLZ_Templates::normalize_days( $days );
 		$meeting_id = self::api_meeting_id( $row );
 		$passcode   = trim( (string) $row->passcode );
 		if ( $passcode === '' ) {
@@ -483,9 +484,10 @@ class HLZ_Shares {
 
 		$details   = HLZ_Zoom::get_meeting_recordings( $meeting_id );
 		$share_url = ( ! is_wp_error( $details ) ) ? trim( (string) ( $details['share_url'] ?? '' ) ) : '';
-		$expires   = self::plus_days( 30 );
+		$expires   = self::plus_days( $days );
 		$fields    = array(
 			'passcode'   => $passcode,
+			'share_days' => $days,
 			'expires_at' => $expires,
 			'status'     => ( (string) $row->sent_at !== '' ) ? 'shared' : 'prepared',
 			'last_error' => '',
@@ -564,14 +566,15 @@ class HLZ_Shares {
 	}
 
 	/**
-	 * Start the 30-day clock on prepared links for this class.
+	 * Start the share clock on prepared links for this class.
 	 */
-	public static function mark_sent( int $eve_id ): void {
+	public static function mark_sent( int $eve_id, int $days = 30 ): void {
 		global $wpdb;
 		$table = HLZ_DB::recordings_table();
 		$rows  = self::for_event( $eve_id );
 		$now   = current_time( 'mysql' );
-		$exp   = self::plus_days( 30 );
+		$days  = HLZ_Templates::normalize_days( $days );
+		$exp   = self::plus_days( $days );
 		foreach ( $rows as $row ) {
 			if ( trim( (string) $row->share_url ) === '' ) {
 				continue;
@@ -589,6 +592,7 @@ class HLZ_Shares {
 			if ( (string) $row->sent_at === '' ) {
 				$fields['sent_at']    = $now;
 				$fields['expires_at'] = $exp;
+				$fields['share_days'] = $days;
 			}
 			$wpdb->update( $table, $fields, array( 'id' => (int) $row->id ) );
 		}

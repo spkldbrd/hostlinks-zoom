@@ -189,7 +189,8 @@ class HLZ_Admin {
 		if ( $subject === '' || trim( wp_strip_all_tags( $body ) ) === '' ) {
 			self::redirect_template( $slug, 'Subject and body are required.', true );
 		}
-		$ok = HLZ_Templates::save( $slug, $subject, $body );
+		$days = HLZ_Templates::normalize_days( absint( $_POST['share_days'] ?? 30 ) );
+		$ok   = HLZ_Templates::save( $slug, $subject, $body, $days );
 		self::redirect_template( $slug, $ok ? 'Template saved.' : 'Template was not found.', ! $ok );
 	}
 
@@ -255,7 +256,7 @@ class HLZ_Admin {
 			$parts[] = 'Zoom already shared a recording but did not return the passcode. Enter it below, or create a new one.';
 		}
 		if ( empty( $parts ) ) {
-			return 'Share links are ready. The 30-day clock starts when you send to the class.';
+			return 'Share links are ready. The share clock starts when you send to the class.';
 		}
 		return implode( ' ', $parts );
 	}
@@ -374,11 +375,12 @@ class HLZ_Admin {
 
 	private static function post_share( string $which ): void {
 		$id     = absint( $_POST['recording_id'] ?? 0 );
-		$result = ( $which === 'extend' ) ? HLZ_Shares::extend( $id ) : HLZ_Shares::turn_off( $id );
+		$length = HLZ_Templates::normalize_days( absint( $_POST['extend_days'] ?? 30 ) );
+		$result = ( $which === 'extend' ) ? HLZ_Shares::extend( $id, $length ) : HLZ_Shares::turn_off( $id );
 		$eve_id = absint( $_POST['eve_id'] ?? 0 );
 		$ok     = ! is_wp_error( $result );
 		$text   = $ok
-			? ( $which === 'extend' ? 'Share extended 30 days from today.' : 'Share link turned off.' )
+			? ( $which === 'extend' ? 'Share extended ' . $length . ' days from today. The passcode is unchanged.' : 'Share link turned off.' )
 			: $result->get_error_message();
 		if ( $eve_id > 0 && isset( $_POST['hlz_return'] ) && sanitize_key( wp_unslash( $_POST['hlz_return'] ) ) === 'preview' ) {
 			self::redirect_preview( $eve_id, $text, ! $ok );
@@ -467,7 +469,7 @@ class HLZ_Admin {
 
 		echo '<div class="hlz-card">';
 		echo '<h2>Currently shared</h2>';
-		echo '<p class="hlz-muted">Public links that were prepared or sent, plus links turned off in the last 120 days. Newest first. Extend keeps the same passcode and sets a new 30 days from today.</p>';
+		echo '<p class="hlz-muted">Public links that were prepared or sent, plus links turned off in the last 120 days. Newest first. Extend keeps the same passcode and uses the number of days you confirm.</p>';
 		self::render_shared_table( $slice['rows'], $shared_events, 0 );
 		self::render_list_pagination( $total, $page, array( 'tab' => 'shared' ) );
 		echo '</div>';
@@ -562,7 +564,7 @@ class HLZ_Admin {
 
 		self::page_open( 'Email templates' );
 		self::render_flash();
-		echo '<div class="hlz-card"><p>One template per class type. Use the bold button for emphasis. <code>{zoom}</code> becomes the link and passcode. <code>{dates}</code> is the class date. <code>{note}</code> is the one-off message from the preview, and is removed when that box is empty. Paste each class type’s materials URL over <code>PASTE MATERIALS URL HERE</code>.</p>';
+		echo '<div class="hlz-card"><p>One template per class type. Use the bold button for emphasis. <code>{zoom}</code> becomes the link and passcode. <code>{dates}</code> is the class date. <code>{days}</code> is the share length below. <code>{note}</code> is the one-off message from the preview, and is removed when that box is empty. Paste each class type’s materials URL over <code>PASTE MATERIALS URL HERE</code>.</p>';
 		echo '<ul>';
 		foreach ( $templates as $template ) {
 			$url = add_query_arg(
@@ -585,8 +587,12 @@ class HLZ_Admin {
 			wp_nonce_field( 'hlz_save_template' );
 			echo '<input type="hidden" name="hlz_action" value="save_template">';
 			echo '<input type="hidden" name="slug" value="' . esc_attr( $current->slug ) . '">';
+			$share_days = HLZ_Templates::share_days( $current );
 			echo '<p><label for="hlz-subject"><strong>Subject</strong></label><br>';
 			echo '<input id="hlz-subject" name="subject" type="text" class="regular-text" style="width:100%;max-width:760px" value="' . esc_attr( $current->subject ) . '"></p>';
+			echo '<p><label for="hlz-share-days"><strong>Share days</strong></label><br>';
+			echo '<input id="hlz-share-days" name="share_days" type="number" min="1" max="365" value="' . esc_attr( (string) $share_days ) . '" style="width:80px"> ';
+			echo '<span class="hlz-muted">Days the link stays on after Send. Deep Dive starts at 15. Other classes start at 30.</span></p>';
 			echo '<p><strong>Body</strong></p>';
 			wp_editor(
 				HLZ_Mailer::body_for_editor( (string) $current->body ),
@@ -623,7 +629,7 @@ class HLZ_Admin {
 		echo '<li><code>cloud_recording:read:list_recording_files:admin</code></li>';
 		echo '<li><code>cloud_recording:read:recording_settings:admin</code></li>';
 		echo '<li><code>cloud_recording:update:recording_settings:admin</code></li></ul>';
-		echo '<p>The Zoom role also needs permission to view recording content. That permission lets the plugin read an existing passcode instead of replacing it. Viewers can see the chat is an account setting for newly generated recordings. Zoom’s per-recording API cannot turn that on. The “Set expiration date” checkbox also has no API; Hostlinks unpublishes the share 30 days after Send.</p>';
+		echo '<p>The Zoom role also needs permission to view recording content. That permission lets the plugin read an existing passcode instead of replacing it. Viewers can see the chat is an account setting for newly generated recordings. Zoom’s per-recording API cannot turn that on. The “Set expiration date” checkbox also has no API; Hostlinks unpublishes the share after the number of days on that class template.</p>';
 		echo '<form method="post">';
 		wp_nonce_field( 'hlz_save_settings' );
 		echo '<input type="hidden" name="hlz_form" value="settings">';
@@ -636,8 +642,9 @@ class HLZ_Admin {
 		self::text_row( 'host_email', 'Zoom host email', $settings['host_email'] );
 		self::text_row( 'from_name', 'From name', $settings['from_name'] );
 		self::text_row( 'from_email', 'From email', $settings['from_email'] );
+		self::text_row( 'cc_email', 'CC email', (string) ( $settings['cc_email'] ?? '' ) );
 		echo '</tbody></table>';
-		echo '<p class="hlz-muted">Mail is sent with WordPress <code>wp_mail</code> through the SMTP2GO plugin already on this site.</p>';
+		echo '<p class="hlz-muted">Mail is sent with WordPress <code>wp_mail</code> through the SMTP2GO plugin already on this site. CC receives a copy of each class email. A test does not include the CC. Leave CC blank to send no copy.</p>';
 		echo '<button type="submit" class="button button-primary" name="hlz_action" value="save_settings">Save settings</button> ';
 		echo '<button type="submit" class="button" name="hlz_action" value="test_connection">Save and test connection</button>';
 		echo '</form></div>';
@@ -690,7 +697,8 @@ class HLZ_Admin {
 		echo '<div class="hlz-title-main">';
 		echo '<h2>' . esc_html( $title ) . '</h2>';
 		echo '<p>' . esc_html( $dates ) . ' · ' . esc_html( self::recording_count_label( $event ) ) . '</p>';
-		echo '<p class="hlz-muted">Anyone with the link can watch (passcode required). We turn downloads off in Zoom. Zoom has no API for its expiration checkbox; we unpublish the share 30 days after Send.</p>';
+		$share_days = HLZ_Templates::share_days_for_event( $event );
+		echo '<p class="hlz-muted">Anyone with the link can watch (passcode required). We turn downloads off in Zoom. Zoom has no API for its expiration checkbox; we unpublish the share ' . (int) $share_days . ' days after Send, from this class template.</p>';
 		echo '</div>';
 		if ( $share['kept'] || $share['internal'] || $share['needs'] ) {
 			echo '<div class="hlz-title-share">';
@@ -734,8 +742,13 @@ class HLZ_Admin {
 			return;
 		}
 
-		echo '<p style="margin:0 0 8px"><strong>From:</strong> ' . esc_html( HLZ_Settings::get()['from_name'] . ' <' . HLZ_Settings::get()['from_email'] . '>' ) . '<br>';
-		echo '<strong>Subject:</strong> ' . esc_html( HLZ_Mailer::render_subject( $template, $event ) ) . '</p>';
+		$from = HLZ_Settings::get();
+		$cc   = sanitize_email( (string) ( $from['cc_email'] ?? '' ) );
+		echo '<p style="margin:0 0 8px"><strong>From:</strong> ' . esc_html( $from['from_name'] . ' <' . $from['from_email'] . '>' );
+		if ( is_email( $cc ) ) {
+			echo '<br><strong>CC:</strong> ' . esc_html( $cc );
+		}
+		echo '<br><strong>Subject:</strong> ' . esc_html( HLZ_Mailer::render_subject( $template, $event ) ) . '</p>';
 		$preview = HLZ_Mailer::render( $template, $event, $rows, $note );
 		$me      = wp_get_current_user();
 		echo '<form method="post">';
@@ -967,6 +980,7 @@ class HLZ_Admin {
 			echo '<td><span class="hlz-status hlz-status-' . esc_attr( (string) $row->status ) . '">' . esc_html( self::status_label( (string) $row->status ) ) . '</span></td>';
 			echo '<td>' . esc_html( (string) $row->expires_at !== '' ? (string) $row->expires_at : 'Starts when sent' ) . '</td>';
 			echo '<td class="hlz-actions">';
+			$extend_days = self::extend_default_days( $row, $event );
 			echo '<form method="post">';
 			wp_nonce_field( 'hlz_extend' );
 			echo '<input type="hidden" name="hlz_action" value="extend">';
@@ -977,7 +991,8 @@ class HLZ_Admin {
 			}
 			echo '<input type="hidden" name="days" value="' . esc_attr( (string) self::days_from_request() ) . '">';
 			echo '<input type="hidden" name="tab" value="' . esc_attr( self::tab_from_request() ) . '">';
-			submit_button( 'Extend', 'secondary', 'submit', false );
+			echo '<input type="number" name="extend_days" min="1" max="365" value="' . esc_attr( (string) $extend_days ) . '" style="width:70px" aria-label="Days to extend"> ';
+			echo '<button type="submit" class="button" onclick="return confirm(\'Extend this share for \' + this.form.extend_days.value + \' days from today? The passcode stays the same.\');">Extend</button>';
 			echo '</form>';
 			if ( (string) $row->status !== 'off' ) {
 				echo '<form method="post">';
@@ -1200,6 +1215,17 @@ class HLZ_Admin {
 			$note = substr( $note, 0, 2000 );
 		}
 		return $note;
+	}
+
+	private static function extend_default_days( object $row, ?array $event ): int {
+		$stored = (int) ( $row->share_days ?? 0 );
+		if ( $stored > 0 ) {
+			return HLZ_Templates::normalize_days( $stored );
+		}
+		if ( is_array( $event ) ) {
+			return HLZ_Templates::share_days_for_event( $event );
+		}
+		return 30;
 	}
 
 	private static function days_from_request(): int {

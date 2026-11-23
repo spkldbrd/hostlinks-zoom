@@ -73,8 +73,8 @@ class HLZ_Mailer {
 		}
 
 		$body = str_replace(
-			array( '{class_name}', '{dates}', '{note}', '{zoom}' ),
-			array( esc_html( $class_name ), esc_html( $dates ), $note_html, self::zoom_block( $recordings ) ),
+			array( '{class_name}', '{dates}', '{note}', '{days}', '{zoom}' ),
+			array( esc_html( $class_name ), esc_html( $dates ), $note_html, (string) HLZ_Templates::share_days( $template ), self::zoom_block( $recordings ) ),
 			$body
 		);
 
@@ -141,7 +141,7 @@ class HLZ_Mailer {
 		$eve_id  = (int) $event['eve_id'];
 		$subject = self::render_subject( $template, $event );
 		$body    = self::message_html( self::render( $template, $event, $recordings, $note ) );
-		$headers = self::headers();
+		$headers = self::headers( true );
 
 		$prior = array();
 		foreach ( HLZ_Shares::sends_for_event( $eve_id ) as $row ) {
@@ -179,7 +179,7 @@ class HLZ_Mailer {
 		}
 
 		if ( $sent > 0 ) {
-			HLZ_Shares::mark_sent( $eve_id );
+			HLZ_Shares::mark_sent( $eve_id, HLZ_Templates::share_days( $template ) );
 		}
 
 		return array(
@@ -202,7 +202,7 @@ class HLZ_Mailer {
 		}
 
 		$subject = '[Test] ' . self::render_subject( $template, $event );
-		$banner  = '<p><em>This is a test. It was not sent to the class, and it did not start the 30-day share clock.</em></p>';
+		$banner  = '<p><em>This is a test. It was not sent to the class, and it did not start the share clock.</em></p>';
 		$body    = self::message_html( $banner . self::render( $template, $event, $recordings, $note ) );
 		$ok      = wp_mail( $to, $subject, $body, self::headers() );
 		if ( ! $ok ) {
@@ -214,12 +214,19 @@ class HLZ_Mailer {
 	/**
 	 * @return array<int,string>
 	 */
-	private static function headers(): array {
-		$from = HLZ_Settings::get();
-		return array(
+	private static function headers( bool $copy = false ): array {
+		$from    = HLZ_Settings::get();
+		$headers = array(
 			'Content-Type: text/html; charset=UTF-8',
 			'From: ' . self::from_header( $from['from_name'], $from['from_email'] ),
 		);
+		if ( $copy ) {
+			$cc = sanitize_email( (string) ( $from['cc_email'] ?? '' ) );
+			if ( is_email( $cc ) ) {
+				$headers[] = 'Cc: ' . $cc;
+			}
+		}
+		return $headers;
 	}
 
 	private static function message_html( string $body ): string {

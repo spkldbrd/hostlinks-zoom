@@ -19,6 +19,7 @@ class HLZ_Settings {
 			'host_email'    => 'zoom@grantwritingusa.com',
 			'from_email'    => 'cs@grantwritingusa.com',
 			'from_name'     => 'Client Services Team',
+			'cc_email'      => '',
 		);
 	}
 
@@ -41,6 +42,7 @@ class HLZ_Settings {
 			'host_email'    => sanitize_email( $input['host_email'] ?? '' ),
 			'from_email'    => sanitize_email( $input['from_email'] ?? '' ),
 			'from_name'     => sanitize_text_field( $input['from_name'] ?? '' ),
+			'cc_email'      => sanitize_email( $input['cc_email'] ?? '' ),
 		);
 
 		if ( $next['host_email'] === '' ) {

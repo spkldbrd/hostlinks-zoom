@@ -36,6 +36,7 @@ class HLZ_DB {
 
 		self::create_tables();
 		HLZ_Templates::seed_missing();
+		HLZ_Templates::seed_share_days();
 		HLZ_Cron::schedule();
 		update_option( 'hlz_db_version', HLZ_DB_VERSION );
 		update_option( 'hlz_version', HLZ_VERSION );
@@ -48,6 +49,7 @@ class HLZ_DB {
 		self::create_tables();
 		if ( class_exists( 'HLZ_Templates', false ) ) {
 			HLZ_Templates::seed_missing();
+			HLZ_Templates::seed_share_days();
 		}
 		update_option( 'hlz_db_version', HLZ_DB_VERSION );
 	}
@@ -66,6 +68,7 @@ class HLZ_DB {
 				match_phrase varchar(191) NOT NULL DEFAULT '',
 				subject varchar(191) NOT NULL DEFAULT '',
 				body longtext NOT NULL,
+				share_days smallint(5) unsigned NOT NULL DEFAULT 30,
 				updated_at datetime DEFAULT NULL,
 				PRIMARY KEY  (id),
 				UNIQUE KEY slug (slug)
@@ -85,6 +88,7 @@ class HLZ_DB {
 				share_url text NULL,
 				passcode varchar(20) NOT NULL DEFAULT '',
 				share_origin varchar(32) NOT NULL DEFAULT '',
+				share_days smallint(5) unsigned NOT NULL DEFAULT 0,
 				match_source varchar(20) NOT NULL DEFAULT '',
 				prepared_at datetime DEFAULT NULL,
 				sent_at datetime DEFAULT NULL,

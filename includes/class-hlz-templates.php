@@ -21,6 +21,7 @@ class HLZ_Templates {
 				'slug'      => 'deep-dive-1',
 				'label'     => 'Deep Dive Session 1',
 				'phrase'    => 'Deep Dive Session 1',
+				'days'      => 15,
 				'subject'   => 'Deep Dive Session 1 Class Replay',
 				'thanks'    => 'Deep Dive Session 1',
 				'materials' => 'including the current class materials and other workshop resources.',
@@ -29,6 +30,7 @@ class HLZ_Templates {
 				'slug'      => 'deep-dive-2',
 				'label'     => 'Deep Dive Session 2',
 				'phrase'    => 'Deep Dive Session 2',
+				'days'      => 15,
 				'subject'   => 'Deep Dive Session 2 Class Replay',
 				'thanks'    => 'Deep Dive Session 2',
 				'materials' => 'including the current class materials and other workshop resources.',
@@ -37,6 +39,7 @@ class HLZ_Templates {
 				'slug'      => 'deep-dive-3',
 				'label'     => 'Deep Dive Session 3',
 				'phrase'    => 'Deep Dive Session 3',
+				'days'      => 15,
 				'subject'   => 'Deep Dive Session 3 Class Replay',
 				'thanks'    => 'Deep Dive Session 3',
 				'materials' => 'including the current class materials and other workshop resources.',
@@ -45,6 +48,7 @@ class HLZ_Templates {
 				'slug'      => 'grant-management',
 				'label'     => 'Grant Management',
 				'phrase'    => 'Grant Management',
+				'days'      => 30,
 				'subject'   => 'Grant Management Class Replay',
 				'thanks'    => 'the Grant Management USA Live Zoom Class',
 				'materials' => 'including the current Grant Management Workbook and other workshop resources.',
@@ -53,6 +57,7 @@ class HLZ_Templates {
 				'slug'      => 'subawards',
 				'label'     => 'Managing Subawards',
 				'phrase'    => 'Subaward',
+				'days'      => 30,
 				'subject'   => 'Managing Subawards Class Replay',
 				'thanks'    => 'the Managing Subawards Training',
 				'materials' => 'including the current class materials and other workshop resources.',
@@ -61,6 +66,7 @@ class HLZ_Templates {
 				'slug'      => 'grant-writing',
 				'label'     => 'Grant Writing',
 				'phrase'    => 'Grant Writing',
+				'days'      => 30,
 				'subject'   => 'Grant Writing Class Replay',
 				'thanks'    => 'the Grant Writing USA Live Zoom Class',
 				'materials' => 'including the current Grant Writing Workbook and other workshop resources.',
@@ -97,9 +103,10 @@ class HLZ_Templates {
 					'match_phrase' => $def['phrase'],
 					'subject'      => $def['subject'],
 					'body'         => self::starter_body( $def['thanks'], $def['materials'] ),
+					'share_days'   => self::normalize_days( (int) ( $def['days'] ?? 30 ) ),
 					'updated_at'   => current_time( 'mysql' ),
 				),
-				array( '%s', '%s', '%s', '%s', '%s', '%s' )
+				array( '%s', '%s', '%s', '%s', '%s', '%d', '%s' )
 			);
 		}
 	}
@@ -110,7 +117,7 @@ class HLZ_Templates {
 			. "{note}\n"
 			. "Access on-demand recordings:\n"
 			. "\n"
-			. "You have access to on-demand recordings for 30 days.  They're for your viewing only so we kindly ask you not share the below info with others.\n"
+			. "You have access to on-demand recordings for {days} days.  They're for your viewing only so we kindly ask you not share the below info with others.\n"
 			. "\n"
 			. "{zoom}\n"
 			. "\n"
@@ -161,7 +168,7 @@ class HLZ_Templates {
 		return is_object( $row ) ? $row : null;
 	}
 
-	public static function save( string $slug, string $subject, string $body ): bool {
+	public static function save( string $slug, string $subject, string $body, int $share_days ): bool {
 		global $wpdb;
 		$existing = self::get( $slug );
 		if ( ! $existing ) {
@@ -172,13 +179,58 @@ class HLZ_Templates {
 			array(
 				'subject'    => $subject,
 				'body'       => $body,
+				'share_days' => self::normalize_days( $share_days ),
 				'updated_at' => current_time( 'mysql' ),
 			),
 			array( 'slug' => $slug ),
-			array( '%s', '%s', '%s' ),
+			array( '%s', '%s', '%d', '%s' ),
 			array( '%s' )
 		);
 		return $updated !== false;
+	}
+
+	public static function normalize_days( int $days ): int {
+		if ( $days < 1 ) {
+			return 30;
+		}
+		if ( $days > 365 ) {
+			return 365;
+		}
+		return $days;
+	}
+
+	public static function share_days( ?object $template ): int {
+		if ( ! $template ) {
+			return 30;
+		}
+		return self::normalize_days( (int) ( $template->share_days ?? 30 ) );
+	}
+
+	public static function share_days_for_event( array $event ): int {
+		return self::share_days( HLZ_Mailer::template_for_event( $event ) );
+	}
+
+	/**
+	 * First upgrade writes each template's default length and points the
+	 * starter "30 days" sentence at {days}. Later edits are left alone.
+	 */
+	public static function seed_share_days(): void {
+		if ( get_option( 'hlz_share_days_seeded' ) === '1' ) {
+			return;
+		}
+		global $wpdb;
+		$table = HLZ_DB::templates_table();
+		foreach ( self::definitions() as $def ) {
+			$wpdb->update(
+				$table,
+				array( 'share_days' => self::normalize_days( (int) ( $def['days'] ?? 30 ) ) ),
+				array( 'slug' => $def['slug'] ),
+				array( '%d' ),
+				array( '%s' )
+			);
+		}
+		$wpdb->query( "UPDATE `{$table}` SET body = REPLACE(body, 'for 30 days.', 'for {days} days.') WHERE body LIKE '%for 30 days.%'" );
+		update_option( 'hlz_share_days_seeded', '1', false );
 	}
 
 	/**
